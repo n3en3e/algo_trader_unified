@@ -25,6 +25,13 @@ from algo_trader_unified.core.reconciliation import reconcile_check
 from algo_trader_unified.core.state_store import StateStore, StateStoreCorruptError
 
 
+PACKAGE_ROOT = Path(__file__).resolve().parents[1]
+
+
+def source_path(*parts: str) -> Path:
+    return PACKAGE_ROOT.joinpath(*parts)
+
+
 class TmpCase(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
@@ -131,7 +138,7 @@ class StateStoreTests(TmpCase):
     def test_fresh_schema_and_readiness(self) -> None:
         store = StateStore(self.root / "data/state/portfolio_state.json")
         self.assertEqual(store.state["schema_version"], 1)
-        readiness = store.state["readiness"][S02_VOL_ENHANCED]
+        readiness = store.get_readiness(S02_VOL_ENHANCED)
         self.assertIn("standard_strangle_clean_days", readiness)
         self.assertIn("last_clean_day_date", readiness)
         self.assertIn("last_reconciliation_check", readiness)
@@ -226,13 +233,13 @@ class ReconciliationTests(TmpCase):
         append.assert_not_called()
 
     def test_reconciliation_module_has_no_jsonl_io(self) -> None:
-        for module_path in [
-            "algo_trader_unified/tools/halt.py",
-            "algo_trader_unified/tools/resume_halt.py",
-            "algo_trader_unified/tools/reconcile_check.py",
-            "algo_trader_unified/core/reconciliation.py",
-        ]:
-            source = Path(module_path).read_text()
+        for module_path in (
+            source_path("tools", "halt.py"),
+            source_path("tools", "resume_halt.py"),
+            source_path("tools", "reconcile_check.py"),
+            source_path("core", "reconciliation.py"),
+        ):
+            source = module_path.read_text()
             self.assertNotIn(".jsonl", source, module_path)
             self.assertNotIn("open(", source, module_path)
 

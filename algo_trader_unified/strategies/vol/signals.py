@@ -16,19 +16,20 @@ from typing import Iterable
 
 from algo_trader_unified.config.portfolio import PAPER_RESEARCH_CAPITAL
 from algo_trader_unified.config.variants import StrategyVariantConfig
+from algo_trader_unified.core.skip_reasons import (
+    SKIP_BLACKOUT_DATE,
+    SKIP_EXISTING_POSITION,
+    SKIP_HALTED,
+    SKIP_IV_RANK_BELOW_MIN,
+    SKIP_NEEDS_RECONCILIATION,
+    SKIP_ORDERREF_MISSING,
+    SKIP_VIX_GATE,
+)
 from algo_trader_unified.core.state_store import StateStore
 from algo_trader_unified.strategies.base import RiskManagerProtocol
 
 
 ENTRY_EXECUTION_MODES = {"shadow", "paper_only", "paper_proxy_for_live", "live_enabled"}
-
-SKIP_HALTED = "SKIP_HALTED"
-SKIP_EXISTING_POSITION = "SKIP_EXISTING_POSITION"
-SKIP_BLACKOUT_DATE = "SKIP_BLACKOUT_DATE"
-SKIP_VIX_GATE = "SKIP_VIX_GATE"
-SKIP_IV_RANK_BELOW_MIN = "SKIP_IV_RANK_BELOW_MIN"
-SKIP_NEEDS_RECONCILIATION = "SKIP_NEEDS_RECONCILIATION"
-SKIP_ORDERREF_MISSING = "SKIP_ORDERREF_MISSING"
 
 ACTION_HOLD = "hold"
 ACTION_CLOSE_MANUAL = "close_manual"

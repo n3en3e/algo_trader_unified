@@ -49,6 +49,13 @@ from algo_trader_unified.strategies.vol.signals import (
 )
 
 
+PACKAGE_ROOT = Path(__file__).resolve().parents[1]
+
+
+def source_path(*parts: str) -> Path:
+    return PACKAGE_ROOT.joinpath(*parts)
+
+
 class BlockingRiskManager:
     def __init__(self, *, halted: bool = False, can_enter: bool = True) -> None:
         self._halted = halted
@@ -218,7 +225,7 @@ class Phase2AVolGateTests(VolCase):
                 self.assertEqual(result.skip_reason, SKIP_HALTED)
                 self.assert_context_schema(result)
                 self.client.placeOrder.assert_not_called()
-        source = Path("algo_trader_unified/strategies/vol/engine.py").read_text()
+        source = source_path("strategies", "vol", "engine.py").read_text()
         self.assertNotIn("halt_state.json", source)
 
     def test_blackout_date_skip(self) -> None:
@@ -296,14 +303,18 @@ class Phase2AVolGateTests(VolCase):
         self.assertIn("SIGNAL_SKIPPED", exec_text)
 
     def test_no_market_data_imports(self) -> None:
-        for module_path in [
-            "algo_trader_unified/strategies/vol/signals.py",
-            "algo_trader_unified/strategies/vol/engine.py",
-        ]:
-            source = Path(module_path).read_text()
+        for module_path in (
+            source_path("strategies", "vol", "signals.py"),
+            source_path("strategies", "vol", "engine.py"),
+        ):
+            source = module_path.read_text()
             self.assertNotIn("yfinance", source)
             self.assertNotIn("ib_insync", source)
             self.assertNotIn("requests", source)
+
+    def test_source_path_helper_resolves_from_test_file(self) -> None:
+        self.assertTrue(source_path("strategies", "vol", "signals.py").exists())
+        self.assertEqual(source_path().name, "algo_trader_unified")
 
 
 class Phase2AProtocolTests(unittest.TestCase):
@@ -316,7 +327,7 @@ class Phase2AProtocolTests(unittest.TestCase):
         self.assertIn("iv_rank", signature.parameters)
 
     def test_no_submit_order_call_in_engine_source(self) -> None:
-        source = Path("algo_trader_unified/strategies/vol/engine.py").read_text()
+        source = source_path("strategies", "vol", "engine.py").read_text()
         self.assertNotIn("submit_order(", source)
 
 
@@ -549,16 +560,16 @@ class Phase2BLifecycleTests(VolCase):
         self.assertIn("POSITION_CLOSED", exec_text)
 
     def test_no_direct_file_writes_in_vol_lifecycle(self) -> None:
-        for module_path in [
-            "algo_trader_unified/strategies/vol/engine.py",
-            "algo_trader_unified/strategies/vol/signals.py",
-            "algo_trader_unified/tools/halt.py",
-            "algo_trader_unified/tools/resume_halt.py",
-            "algo_trader_unified/tools/reconcile_check.py",
-            "algo_trader_unified/core/reconciliation.py",
-        ]:
-            source = Path(module_path).read_text()
-            if "strategies/vol" in module_path:
+        for module_path in (
+            source_path("strategies", "vol", "engine.py"),
+            source_path("strategies", "vol", "signals.py"),
+            source_path("tools", "halt.py"),
+            source_path("tools", "resume_halt.py"),
+            source_path("tools", "reconcile_check.py"),
+            source_path("core", "reconciliation.py"),
+        ):
+            source = module_path.read_text()
+            if "strategies/vol" in module_path.as_posix():
                 self.assertNotIn(".jsonl", source, module_path)
                 self.assertNotIn("write_text", source, module_path)
                 self.assertNotIn(".open(", source, module_path)
@@ -696,7 +707,7 @@ class Phase2CManagementSignalTests(VolCase):
             self.assertEqual(result.context["profit_target_pct"], config.params["profit_target_pct"])
             self.assertEqual(result.context["stop_loss_mult"], config.params["stop_loss_mult"])
             self.assertEqual(result.context["dte_close_threshold"], config.params["dte_close_threshold"])
-        source = Path("algo_trader_unified/strategies/vol/signals.py").read_text()
+        source = source_path("strategies", "vol", "signals.py").read_text()
         self.assertIn('config.params["profit_target_pct"]', source)
         self.assertIn('config.params["stop_loss_mult"]', source)
         self.assertIn('config.params["dte_close_threshold"]', source)
@@ -1041,7 +1052,7 @@ class Phase2DOrderManagerTests(VolCase):
         self.client.placeOrder.assert_not_called()
 
     def test_no_engine_order_layer_inversion(self) -> None:
-        source = Path("algo_trader_unified/strategies/vol/engine.py").read_text()
+        source = source_path("strategies", "vol", "engine.py").read_text()
         self.assertNotIn("from algo_trader_unified.strategies.vol.order_manager", source)
         self.assertNotIn("VolOrderManager(", source)
         self.assertNotIn("CloseOrderIntent", source)
@@ -1049,7 +1060,7 @@ class Phase2DOrderManagerTests(VolCase):
         self.assertNotIn("execute_close", source)
 
     def test_order_manager_no_direct_file_writes(self) -> None:
-        source = Path("algo_trader_unified/strategies/vol/order_manager.py").read_text()
+        source = source_path("strategies", "vol", "order_manager.py").read_text()
         self.assertNotIn(".jsonl", source)
         self.assertNotIn("write_text", source)
         self.assertNotIn(".open(", source)

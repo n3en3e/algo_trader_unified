@@ -23,6 +23,12 @@ from algo_trader_unified.config.portfolio import STRATEGY_IDS, S02_VOL_ENHANCED
 
 
 CURRENT_SCHEMA_VERSION = 1
+S02_LEGACY_READINESS_FIELDS = {
+    "standard_strangle_clean_days": 0,
+    "last_clean_day_date": None,
+    "last_reconciliation_check": None,
+    "0dte_jobs_registered": False,
+}
 
 
 class StateStoreCorruptError(RuntimeError):
@@ -41,12 +47,9 @@ def _fresh_state() -> dict[str, Any]:
         "reconciliation_snapshots": [],
         "halt_state": None,
         "readiness": {
-            S02_VOL_ENHANCED: {
-                "standard_strangle_clean_days": 0,
-                "last_clean_day_date": None,
-                "last_reconciliation_check": None,
-                "0dte_jobs_registered": False,
-            }
+            "strategies": {
+                S02_VOL_ENHANCED: deepcopy(S02_LEGACY_READINESS_FIELDS),
+            },
         },
     }
 
@@ -89,12 +92,22 @@ class StateStore:
                 f"StateStore schema_version mismatch: found {found!r}, "
                 f"expected {CURRENT_SCHEMA_VERSION!r}"
             )
-        payload.setdefault("readiness", {})
-        payload["readiness"].setdefault(
-            S02_VOL_ENHANCED,
-            _fresh_state()["readiness"][S02_VOL_ENHANCED],
-        )
+        self._normalize_readiness(payload)
         return payload
+
+    @staticmethod
+    def _normalize_readiness(payload: dict[str, Any]) -> None:
+        readiness = payload.setdefault("readiness", {})
+        strategies = readiness.setdefault("strategies", {})
+        existing = strategies.setdefault(S02_VOL_ENHANCED, {})
+        legacy_top_level = readiness.get(S02_VOL_ENHANCED, {})
+        for key, default in S02_LEGACY_READINESS_FIELDS.items():
+            if key not in existing:
+                if isinstance(legacy_top_level, dict) and key in legacy_top_level:
+                    existing[key] = legacy_top_level[key]
+                else:
+                    existing[key] = default
+        readiness.pop(S02_VOL_ENHANCED, None)
 
     def save(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -129,6 +142,32 @@ class StateStore:
         if not snapshots:
             return None
         return snapshots[-1]
+
+    def get_readiness(self, strategy_id: str) -> dict[str, Any] | None:
+        readiness = self.state.setdefault("readiness", {})
+        strategies = readiness.setdefault("strategies", {})
+        if strategy_id in strategies:
+            return deepcopy(strategies[strategy_id])
+        return None
+
+    def update_readiness(
+        self,
+        strategy_id: str,
+        readiness_status: dict[str, Any],
+    ) -> None:
+        with self.get_strategy_lock(strategy_id):
+            readiness = self.state.setdefault("readiness", {})
+            strategies = readiness.setdefault("strategies", {})
+            existing = deepcopy(strategies.get(strategy_id, {}))
+            if strategy_id == S02_VOL_ENHANCED:
+                for key, default in S02_LEGACY_READINESS_FIELDS.items():
+                    existing.setdefault(key, default)
+            existing.update(deepcopy(readiness_status))
+            strategies[strategy_id] = existing
+            self.save()
+
+    def get_all_readiness(self) -> dict[str, Any]:
+        return deepcopy(self.state.setdefault("readiness", {}))
 
     def bot_attributed_exposure(self) -> dict[str, float]:
         exposure: dict[str, float] = {}
