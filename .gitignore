@@ -11,3 +11,6 @@ data/state/*.json
 data/state/*.tmp
 data/ledger/*.jsonl
 data/snapshots/
+
+# Local Codex/session metadata
+.codex/
