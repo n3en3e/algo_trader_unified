@@ -6,9 +6,8 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Callable
 
-from algo_trader_unified.config.portfolio import S01_VOL_BASELINE
-from algo_trader_unified.config.scheduler import JOB_S01_VOL_SCAN
-from algo_trader_unified.config.variants import S01_CONFIG
+from algo_trader_unified.config.scheduler import JOB_S01_VOL_SCAN, JOB_S02_VOL_SCAN
+from algo_trader_unified.config.variants import S01_CONFIG, S02_CONFIG, StrategyVariantConfig
 from algo_trader_unified.core.ledger_reader import LedgerReader, LedgerReadError
 from algo_trader_unified.core.readiness import ReadinessManager, ReadinessStatus
 from algo_trader_unified.core.skip_reasons import (
@@ -32,7 +31,14 @@ class VolScanJobResult:
 SignalContextProvider = Callable[[], VolSignalInput]
 
 
-def default_s01_signal_context_provider(
+_VOL_SCAN_JOB_IDS = {
+    S01_CONFIG.strategy_id: JOB_S01_VOL_SCAN,
+    S02_CONFIG.strategy_id: JOB_S02_VOL_SCAN,
+}
+
+
+def default_vol_signal_context_provider(
+    config: StrategyVariantConfig,
     current_time: datetime | None = None,
 ) -> VolSignalInput:
     """Returns a test-safe context with no live data; this intentionally yields SIGNAL_SKIPPED until a real provider is injected."""
@@ -42,10 +48,20 @@ def default_s01_signal_context_provider(
         current_date=now.date(),
         vix=None,
         iv_rank=None,
-        target_dte=int(S01_CONFIG.params["target_dte"]),
+        target_dte=int(config.params["target_dte"]),
         blackout_dates=(),
         order_ref_candidate=None,
     )
+
+
+def default_vol_signal_context_provider_for(
+    config: StrategyVariantConfig,
+    current_time: datetime | None = None,
+) -> SignalContextProvider:
+    def provider() -> VolSignalInput:
+        return default_vol_signal_context_provider(config, current_time)
+
+    return provider
 
 
 def _readiness_allows_entries(readiness: ReadinessStatus | dict | None) -> bool:
@@ -64,6 +80,130 @@ def _readiness_skip_reason(readiness: ReadinessStatus | dict | None) -> str:
     return SKIP_NEEDS_RECONCILIATION
 
 
+def _job_id_for_config(config: StrategyVariantConfig) -> str:
+    try:
+        return _VOL_SCAN_JOB_IDS[config.strategy_id]
+    except KeyError as exc:
+        raise KeyError(f"No job_id registered for strategy_id={config.strategy_id}") from exc
+
+
+def _idempotency_skip_detail(config: StrategyVariantConfig) -> str:
+    return f"{config.strategy_id} signal already generated today"
+
+
+def _readiness_skip_detail(config: StrategyVariantConfig) -> str:
+    return f"{config.strategy_id} vol readiness gate blocked entries"
+
+
+def run_vol_scan(
+    *,
+    config: StrategyVariantConfig,
+    readiness_manager: ReadinessManager,
+    state_store,
+    ledger,
+    broker=None,
+    risk_manager=None,
+    current_time: datetime | None = None,
+    signal_context_provider: SignalContextProvider | None = None,
+    engine: VolSellingEngine | None = None,
+    ledger_reader: LedgerReader | None = None,
+) -> VolScanJobResult:
+    now = current_time or datetime.now(timezone.utc)
+    job_id = _job_id_for_config(config)
+    if ledger_reader is None:
+        if not hasattr(ledger, "root_dir"):
+            raise LedgerReadError(
+                "ledger_reader is required when ledger has no root_dir"
+            )
+        ledger_reader = LedgerReader.from_root(ledger.root_dir)
+    reader = ledger_reader
+    same_day_signals = reader.read_today(
+        strategy_id=config.strategy_id,
+        event_type="SIGNAL_GENERATED",
+        now=now,
+        timezone="America/New_York",
+    )
+    if same_day_signals:
+        ledger.append(
+            event_type="SIGNAL_SKIPPED",
+            strategy_id=config.strategy_id,
+            execution_mode=config.execution_mode,
+            source_module="jobs.vol",
+            payload={
+                "strategy_id": config.strategy_id,
+                "sleeve_id": config.sleeve_id,
+                "skip_reason": SKIP_ALREADY_SIGNALED_TODAY,
+                "skip_detail": _idempotency_skip_detail(config),
+                "gate_name": "vol_idempotency_gate",
+                "execution_mode": config.execution_mode,
+                "matched_event_count": len(same_day_signals),
+            },
+        )
+        return VolScanJobResult(
+            job_id=job_id,
+            strategy_id=config.strategy_id,
+            status="skipped",
+            detail="already_signaled_today",
+            signal_result=None,
+        )
+
+    readiness = readiness_manager.get_readiness(config.strategy_id)
+    if not _readiness_allows_entries(readiness):
+        skip_reason = _readiness_skip_reason(readiness)
+        ledger.append(
+            event_type="SIGNAL_SKIPPED",
+            strategy_id=config.strategy_id,
+            execution_mode=config.execution_mode,
+            source_module="jobs.vol",
+            payload={
+                "strategy_id": config.strategy_id,
+                "sleeve_id": config.sleeve_id,
+                "skip_reason": skip_reason,
+                "skip_detail": _readiness_skip_detail(config),
+                "gate_name": "vol_readiness_gate",
+                "execution_mode": config.execution_mode,
+            },
+        )
+        return VolScanJobResult(
+            job_id=job_id,
+            strategy_id=config.strategy_id,
+            status="skipped",
+            detail="readiness_skipped",
+        )
+
+    provider = signal_context_provider or default_vol_signal_context_provider_for(
+        config,
+        current_time,
+    )
+    signal_input = provider()
+    if not isinstance(signal_input, VolSignalInput):
+        raise TypeError("signal_context_provider must return VolSignalInput")
+
+    vol_engine = engine or VolSellingEngine(
+        config=config,
+        state_store=state_store,
+        ledger=ledger,
+        broker=broker,
+        risk_manager=risk_manager or Phase2ARiskManagerStub(),
+    )
+    signal_result = vol_engine.generate_standard_strangle_signal(signal_input)
+    if signal_result.should_enter:
+        return VolScanJobResult(
+            job_id=job_id,
+            strategy_id=config.strategy_id,
+            status="success",
+            detail="signal_generated",
+            signal_result=signal_result,
+        )
+    return VolScanJobResult(
+        job_id=job_id,
+        strategy_id=config.strategy_id,
+        status="skipped",
+        detail="signal_skipped",
+        signal_result=signal_result,
+    )
+
+
 def run_s01_vol_scan(
     *,
     readiness_manager: ReadinessManager,
@@ -76,93 +216,41 @@ def run_s01_vol_scan(
     engine: VolSellingEngine | None = None,
     ledger_reader: LedgerReader | None = None,
 ) -> VolScanJobResult:
-    now = current_time or datetime.now(timezone.utc)
-    if ledger_reader is None:
-        if not hasattr(ledger, "root_dir"):
-            raise LedgerReadError(
-                "ledger_reader is required when ledger has no root_dir"
-            )
-        ledger_reader = LedgerReader.from_root(ledger.root_dir)
-    reader = ledger_reader
-    same_day_signals = reader.read_today(
-        strategy_id=S01_VOL_BASELINE,
-        event_type="SIGNAL_GENERATED",
-        now=now,
-        timezone="America/New_York",
-    )
-    if same_day_signals:
-        ledger.append(
-            event_type="SIGNAL_SKIPPED",
-            strategy_id=S01_VOL_BASELINE,
-            execution_mode=S01_CONFIG.execution_mode,
-            source_module="jobs.vol",
-            payload={
-                "strategy_id": S01_VOL_BASELINE,
-                "skip_reason": SKIP_ALREADY_SIGNALED_TODAY,
-                "skip_detail": "S01 signal already generated today",
-                "gate_name": "s01_vol_idempotency_gate",
-                "execution_mode": S01_CONFIG.execution_mode,
-                "matched_event_count": len(same_day_signals),
-            },
-        )
-        return VolScanJobResult(
-            job_id=JOB_S01_VOL_SCAN,
-            strategy_id=S01_VOL_BASELINE,
-            status="skipped",
-            detail="already_signaled_today",
-            signal_result=None,
-        )
-
-    readiness = readiness_manager.get_readiness(S01_VOL_BASELINE)
-    if not _readiness_allows_entries(readiness):
-        skip_reason = _readiness_skip_reason(readiness)
-        ledger.append(
-            event_type="SIGNAL_SKIPPED",
-            strategy_id=S01_VOL_BASELINE,
-            execution_mode=S01_CONFIG.execution_mode,
-            source_module="jobs.vol",
-            payload={
-                "strategy_id": S01_VOL_BASELINE,
-                "skip_reason": skip_reason,
-                "skip_detail": "S01 vol readiness gate blocked entries",
-                "gate_name": "s01_vol_readiness_gate",
-                "execution_mode": S01_CONFIG.execution_mode,
-            },
-        )
-        return VolScanJobResult(
-            job_id=JOB_S01_VOL_SCAN,
-            strategy_id=S01_VOL_BASELINE,
-            status="skipped",
-            detail="readiness_skipped",
-        )
-
-    provider = signal_context_provider or (
-        lambda: default_s01_signal_context_provider(current_time)
-    )
-    signal_input = provider()
-    if not isinstance(signal_input, VolSignalInput):
-        raise TypeError("signal_context_provider must return VolSignalInput")
-
-    vol_engine = engine or VolSellingEngine(
+    return run_vol_scan(
         config=S01_CONFIG,
+        readiness_manager=readiness_manager,
         state_store=state_store,
         ledger=ledger,
         broker=broker,
-        risk_manager=risk_manager or Phase2ARiskManagerStub(),
+        risk_manager=risk_manager,
+        current_time=current_time,
+        signal_context_provider=signal_context_provider,
+        ledger_reader=ledger_reader,
+        engine=engine,
     )
-    signal_result = vol_engine.generate_standard_strangle_signal(signal_input)
-    if signal_result.should_enter:
-        return VolScanJobResult(
-            job_id=JOB_S01_VOL_SCAN,
-            strategy_id=S01_VOL_BASELINE,
-            status="success",
-            detail="signal_generated",
-            signal_result=signal_result,
-        )
-    return VolScanJobResult(
-        job_id=JOB_S01_VOL_SCAN,
-        strategy_id=S01_VOL_BASELINE,
-        status="skipped",
-        detail="signal_skipped",
-        signal_result=signal_result,
+
+
+def run_s02_vol_scan(
+    *,
+    readiness_manager: ReadinessManager,
+    state_store,
+    ledger,
+    broker=None,
+    risk_manager=None,
+    current_time: datetime | None = None,
+    signal_context_provider: SignalContextProvider | None = None,
+    engine: VolSellingEngine | None = None,
+    ledger_reader: LedgerReader | None = None,
+) -> VolScanJobResult:
+    return run_vol_scan(
+        config=S02_CONFIG,
+        readiness_manager=readiness_manager,
+        state_store=state_store,
+        ledger=ledger,
+        broker=broker,
+        risk_manager=risk_manager,
+        current_time=current_time,
+        signal_context_provider=signal_context_provider,
+        ledger_reader=ledger_reader,
+        engine=engine,
     )

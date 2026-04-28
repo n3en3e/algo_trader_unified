@@ -281,7 +281,7 @@ class S01IdempotencyTests(TmpCase):
         engine_class.assert_not_called()
         self.assertEqual(events[-1]["event_type"], "SIGNAL_SKIPPED")
         self.assertEqual(events[-1]["payload"]["skip_reason"], SKIP_ALREADY_SIGNALED_TODAY)
-        self.assertEqual(events[-1]["payload"]["gate_name"], "s01_vol_idempotency_gate")
+        self.assertEqual(events[-1]["payload"]["gate_name"], "vol_idempotency_gate")
         self.assertEqual(events[-1]["payload"]["matched_event_count"], 1)
         self.assertEqual([event["event_type"] for event in events].count("SIGNAL_GENERATED"), 1)
         self.assertEqual(self.order_path.read_text(encoding="utf-8"), "")
@@ -320,7 +320,7 @@ class S01IdempotencyTests(TmpCase):
         readiness_manager.get_readiness.assert_not_called()
         provider.assert_not_called()
         self.assertEqual(events[-1]["payload"]["skip_reason"], SKIP_ALREADY_SIGNALED_TODAY)
-        self.assertNotEqual(events[-1]["payload"]["gate_name"], "s01_vol_readiness_gate")
+        self.assertNotEqual(events[-1]["payload"]["gate_name"], "vol_readiness_gate")
 
     def test_no_duplicate_preserves_readiness_skip_signal_skip_and_signal_generated(self) -> None:
         self.set_s01_readiness(ready_for_entries=False, reason=SKIP_NLV_DEGRADED)
@@ -441,9 +441,9 @@ class Phase3CRegressionTests(unittest.TestCase):
         ):
             self.assertNotIn(forbidden, source)
 
-    def test_s02_remains_disabled_and_paper_only(self) -> None:
+    def test_s02_remains_enabled_and_paper_only(self) -> None:
         from algo_trader_unified.config.scheduler import JOB_S02_VOL_SCAN, JOB_SPECS
         from algo_trader_unified.config.variants import S02_CONFIG
 
-        self.assertFalse(JOB_SPECS[JOB_S02_VOL_SCAN].enabled)
+        self.assertTrue(JOB_SPECS[JOB_S02_VOL_SCAN].enabled)
         self.assertEqual(S02_CONFIG.execution_mode, "paper_only")

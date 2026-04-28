@@ -16,7 +16,6 @@ from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from typing import Any, Iterable
 
-from algo_trader_unified.config.portfolio import S01_VOL_BASELINE
 from algo_trader_unified.config.variants import StrategyVariantConfig
 from algo_trader_unified.core.broker import IBKRBrokerWrapper
 from algo_trader_unified.core.ledger import LedgerAppender
@@ -39,6 +38,11 @@ class InvalidSignalError(RuntimeError):
 
 class LifecycleTransitionError(RuntimeError):
     """Raised when a position lifecycle transition is invalid."""
+
+
+def _signal_generated_detail(config: StrategyVariantConfig) -> str:
+    strategy_prefix = config.strategy_id.split("_", 1)[0]
+    return f"{strategy_prefix}_VOL_SIGNAL_GENERATED"
 
 
 @dataclass
@@ -96,8 +100,8 @@ class VolSellingEngine(BaseStrategy):
             "sizing_context": result.sizing_context,
             "risk_context": result.risk_context,
         }
-        if result.should_enter and self.config.strategy_id == S01_VOL_BASELINE:
-            payload["event_detail"] = "S01_VOL_SIGNAL_GENERATED"
+        if result.should_enter:
+            payload["event_detail"] = _signal_generated_detail(self.config)
         if not result.should_enter:
             payload["skip_reason"] = result.skip_reason
             payload["skip_detail"] = result.skip_detail

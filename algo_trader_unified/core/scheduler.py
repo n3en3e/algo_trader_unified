@@ -21,7 +21,7 @@ from algo_trader_unified.jobs.readiness import (
     all_clear_health_snapshot,
     market_open_scan,
 )
-from algo_trader_unified.jobs.vol import run_s01_vol_scan
+from algo_trader_unified.jobs.vol import run_s01_vol_scan, run_s02_vol_scan
 
 
 class SchedulerBuildError(RuntimeError):
@@ -134,8 +134,14 @@ class UnifiedScheduler:
             status = result.status
             detail = result.detail
         elif job_id == JOB_S02_VOL_SCAN:
-            status = "skipped"
-            detail = "stub_not_implemented"
+            result = run_s02_vol_scan(
+                readiness_manager=kwargs.pop("readiness_manager", self.readiness_manager),
+                state_store=kwargs.pop("state_store", self.state_store),
+                ledger=kwargs.pop("ledger", self.ledger),
+                **kwargs,
+            )
+            status = result.status
+            detail = result.detail
         else:
             detail = "noop"
 

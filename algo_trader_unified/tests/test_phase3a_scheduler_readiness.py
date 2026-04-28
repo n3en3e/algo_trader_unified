@@ -102,7 +102,7 @@ class SchedulerConfigTests(unittest.TestCase):
             self.assertEqual(spec.max_instances, DEFAULT_MAX_INSTANCES)
             self.assertEqual(spec.coalesce, DEFAULT_COALESCE)
         self.assertTrue(JOB_SPECS[JOB_S01_VOL_SCAN].enabled)
-        self.assertFalse(JOB_SPECS[JOB_S02_VOL_SCAN].enabled)
+        self.assertTrue(JOB_SPECS[JOB_S02_VOL_SCAN].enabled)
         self.assertFalse(any("0dte" in job_id.lower() for job_id in JOB_SPECS))
 
 
@@ -488,7 +488,7 @@ class S01VolScanJobTests(TmpCase):
         self.assertEqual(result.detail, "readiness_skipped")
         provider.assert_not_called()
         self.assertEqual(events[-1]["event_type"], "SIGNAL_SKIPPED")
-        self.assertEqual(events[-1]["payload"]["gate_name"], "s01_vol_readiness_gate")
+        self.assertEqual(events[-1]["payload"]["gate_name"], "vol_readiness_gate")
         self.assertEqual(events[-1]["payload"]["skip_reason"], SKIP_NLV_DEGRADED)
         self.assertEqual(self.order_ledger_text(), "")
         broker.submit_order.assert_not_called()
@@ -640,7 +640,7 @@ class UnifiedSchedulerRunOnceTests(TmpCase):
             )
         )
 
-    def test_s02_stub_and_unknown_jobs(self) -> None:
+    def test_s02_run_once_readiness_skip_and_unknown_jobs(self) -> None:
         scheduler = UnifiedScheduler(
             state_store=self.state_store,
             ledger=self.ledger,
@@ -648,7 +648,7 @@ class UnifiedSchedulerRunOnceTests(TmpCase):
         )
         result = scheduler.run_job_once(JOB_S02_VOL_SCAN)
         self.assertEqual(result.status, "skipped")
-        self.assertEqual(result.detail, "stub_not_implemented")
+        self.assertEqual(result.detail, "readiness_skipped")
         with self.assertRaises(JobNotFoundError):
             scheduler.run_job_once("missing")
 

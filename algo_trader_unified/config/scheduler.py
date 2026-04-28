@@ -1,8 +1,8 @@
 """Scheduler job registry for the unified runner.
 
-Scheduler config includes readiness infrastructure and Phase 3B S01 dry-run vol
-scan wiring. Job specs here must not imply live market data, order submission,
-contract selection, or position lifecycle mutation.
+Scheduler config includes readiness infrastructure and dry-run vol scan wiring.
+Job specs here must not imply live market data, order submission, contract
+selection, or position lifecycle mutation.
 """
 
 from __future__ import annotations
@@ -76,9 +76,9 @@ JOB_SPECS: dict[str, JobSpec] = {
     ),
     JOB_S02_VOL_SCAN: JobSpec(
         job_id=JOB_S02_VOL_SCAN,
-        description="Disabled Phase 3A S02 vol scan stub",
+        description="Dry-run S02 vol signal scan",
         trigger_type="cron",
         trigger_kwargs={"day_of_week": "mon-fri", "hour": 9, "minute": 45},
-        enabled=False,
+        enabled=True,
     ),
 }
