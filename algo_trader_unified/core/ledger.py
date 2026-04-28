@@ -11,6 +11,12 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+from algo_trader_unified.core.ledger_paths import (
+    EXECUTION_LEDGER_FILENAME,
+    LEDGER_DIR_RELATIVE_PATH,
+    ORDER_LEDGER_FILENAME,
+)
+
 
 ORDER_LEDGER_EVENTS = {
     "ORDER_SUBMITTED",
@@ -64,9 +70,9 @@ class LedgerAppender:
 
     def __init__(self, root_dir: str | Path = ".") -> None:
         self.root_dir = Path(root_dir)
-        self.ledger_dir = self.root_dir / "data" / "ledger"
-        self.order_path = self.ledger_dir / "order_ledger.jsonl"
-        self.execution_path = self.ledger_dir / "execution_ledger.jsonl"
+        self.ledger_dir = self.root_dir / LEDGER_DIR_RELATIVE_PATH
+        self.order_path = self.ledger_dir / ORDER_LEDGER_FILENAME
+        self.execution_path = self.ledger_dir / EXECUTION_LEDGER_FILENAME
         self._locks = {
             self.order_path: threading.Lock(),
             self.execution_path: threading.Lock(),
@@ -147,4 +153,3 @@ class LedgerAppender:
             raise LedgerValidationError("opportunity_id must be a string or None")
         if not isinstance(event.payload, dict):
             raise LedgerValidationError("payload must be a dict")
-

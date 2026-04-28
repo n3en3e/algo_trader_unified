@@ -9,8 +9,12 @@ from typing import Callable
 from algo_trader_unified.config.portfolio import S01_VOL_BASELINE
 from algo_trader_unified.config.scheduler import JOB_S01_VOL_SCAN
 from algo_trader_unified.config.variants import S01_CONFIG
+from algo_trader_unified.core.ledger_reader import LedgerReader, LedgerReadError
 from algo_trader_unified.core.readiness import ReadinessManager, ReadinessStatus
-from algo_trader_unified.core.skip_reasons import SKIP_NEEDS_RECONCILIATION
+from algo_trader_unified.core.skip_reasons import (
+    SKIP_ALREADY_SIGNALED_TODAY,
+    SKIP_NEEDS_RECONCILIATION,
+)
 from algo_trader_unified.strategies.base import Phase2ARiskManagerStub
 from algo_trader_unified.strategies.vol.engine import VolSellingEngine
 from algo_trader_unified.strategies.vol.signals import SignalResult, VolSignalInput
@@ -70,7 +74,45 @@ def run_s01_vol_scan(
     current_time: datetime | None = None,
     signal_context_provider: SignalContextProvider | None = None,
     engine: VolSellingEngine | None = None,
+    ledger_reader: LedgerReader | None = None,
 ) -> VolScanJobResult:
+    now = current_time or datetime.now(timezone.utc)
+    if ledger_reader is None:
+        if not hasattr(ledger, "root_dir"):
+            raise LedgerReadError(
+                "ledger_reader is required when ledger has no root_dir"
+            )
+        ledger_reader = LedgerReader.from_root(ledger.root_dir)
+    reader = ledger_reader
+    same_day_signals = reader.read_today(
+        strategy_id=S01_VOL_BASELINE,
+        event_type="SIGNAL_GENERATED",
+        now=now,
+        timezone="America/New_York",
+    )
+    if same_day_signals:
+        ledger.append(
+            event_type="SIGNAL_SKIPPED",
+            strategy_id=S01_VOL_BASELINE,
+            execution_mode=S01_CONFIG.execution_mode,
+            source_module="jobs.vol",
+            payload={
+                "strategy_id": S01_VOL_BASELINE,
+                "skip_reason": SKIP_ALREADY_SIGNALED_TODAY,
+                "skip_detail": "S01 signal already generated today",
+                "gate_name": "s01_vol_idempotency_gate",
+                "execution_mode": S01_CONFIG.execution_mode,
+                "matched_event_count": len(same_day_signals),
+            },
+        )
+        return VolScanJobResult(
+            job_id=JOB_S01_VOL_SCAN,
+            strategy_id=S01_VOL_BASELINE,
+            status="skipped",
+            detail="already_signaled_today",
+            signal_result=None,
+        )
+
     readiness = readiness_manager.get_readiness(S01_VOL_BASELINE)
     if not _readiness_allows_entries(readiness):
         skip_reason = _readiness_skip_reason(readiness)
