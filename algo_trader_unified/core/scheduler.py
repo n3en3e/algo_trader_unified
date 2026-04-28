@@ -21,6 +21,7 @@ from algo_trader_unified.jobs.readiness import (
     all_clear_health_snapshot,
     market_open_scan,
 )
+from algo_trader_unified.jobs.vol import run_s01_vol_scan
 
 
 class SchedulerBuildError(RuntimeError):
@@ -99,7 +100,7 @@ class UnifiedScheduler:
                 **spec.trigger_kwargs,
             )
 
-    def run_job_once(self, job_id: str) -> JobRunResult:
+    def run_job_once(self, job_id: str, **kwargs) -> JobRunResult:
         if job_id not in self.job_specs:
             raise JobNotFoundError(f"Unknown scheduler job_id: {job_id}")
         started_at = datetime.now(timezone.utc).isoformat()
@@ -109,17 +110,30 @@ class UnifiedScheduler:
 
         if job_id == JOB_MARKET_OPEN_SCAN:
             strategy_ids = (S01_VOL_BASELINE, S02_VOL_ENHANCED)
-            provider = self.health_snapshot_provider
-            snapshot = provider() if provider else all_clear_health_snapshot(strategy_ids)
+            provider = kwargs.pop("health_snapshot_provider", self.health_snapshot_provider)
+            snapshot = kwargs.pop(
+                "health_snapshot",
+                provider() if provider else all_clear_health_snapshot(strategy_ids),
+            )
             result = market_open_scan(
-                readiness_manager=self.readiness_manager,
-                current_time=datetime.now(timezone.utc),
-                strategy_ids=strategy_ids,
+                readiness_manager=kwargs.pop("readiness_manager", self.readiness_manager),
+                current_time=kwargs.pop("current_time", datetime.now(timezone.utc)),
+                strategy_ids=kwargs.pop("strategy_ids", strategy_ids),
                 health_snapshot=snapshot,
+                **kwargs,
             )
             status = "success" if result.all_clear else "skipped"
             detail = "all_clear" if result.all_clear else "readiness_failures"
-        elif job_id in {JOB_S01_VOL_SCAN, JOB_S02_VOL_SCAN}:
+        elif job_id == JOB_S01_VOL_SCAN:
+            result = run_s01_vol_scan(
+                readiness_manager=kwargs.pop("readiness_manager", self.readiness_manager),
+                state_store=kwargs.pop("state_store", self.state_store),
+                ledger=kwargs.pop("ledger", self.ledger),
+                **kwargs,
+            )
+            status = result.status
+            detail = result.detail
+        elif job_id == JOB_S02_VOL_SCAN:
             status = "skipped"
             detail = "stub_not_implemented"
         else:

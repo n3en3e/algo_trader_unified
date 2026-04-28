@@ -1,17 +1,14 @@
 """Scheduler job registry for the unified runner.
 
-Phase 3A only defines scheduler/readiness infrastructure. Job specs here must
-not imply live market data, order submission, contract selection, or position
-lifecycle mutation.
+Scheduler config includes readiness infrastructure and Phase 3B S01 dry-run vol
+scan wiring. Job specs here must not imply live market data, order submission,
+contract selection, or position lifecycle mutation.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import Any
-
-from algo_trader_unified.config.risk import STARTUP_RECON_WATCHDOG_SEC
-
 
 SCHEDULER_TIMEZONE = "America/New_York"
 DEFAULT_COALESCE = True
@@ -72,10 +69,10 @@ JOB_SPECS: dict[str, JobSpec] = {
     ),
     JOB_S01_VOL_SCAN: JobSpec(
         job_id=JOB_S01_VOL_SCAN,
-        description="Disabled Phase 3A S01 vol scan stub",
+        description="Dry-run S01 vol signal scan",
         trigger_type="cron",
         trigger_kwargs={"day_of_week": "mon-fri", "hour": 9, "minute": 40},
-        enabled=False,
+        enabled=True,
     ),
     JOB_S02_VOL_SCAN: JobSpec(
         job_id=JOB_S02_VOL_SCAN,

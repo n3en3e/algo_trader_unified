@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from typing import Any, Iterable
 
+from algo_trader_unified.config.portfolio import S01_VOL_BASELINE
 from algo_trader_unified.config.variants import StrategyVariantConfig
 from algo_trader_unified.core.broker import IBKRBrokerWrapper
 from algo_trader_unified.core.ledger import LedgerAppender
@@ -50,29 +51,35 @@ class VolSellingEngine(BaseStrategy):
 
     def generate_standard_strangle_signal(
         self,
+        signal_input: VolSignalInput | None = None,
         *,
         symbol: str = "XSP",
-        current_date: date,
-        vix: float | None,
-        iv_rank: float | None,
+        current_date: date | None = None,
+        vix: float | None = None,
+        iv_rank: float | None = None,
         target_dte: int | None = None,
         blackout_dates: Iterable[date] = (),
-        order_ref_candidate: str | None,
+        order_ref_candidate: str | None = None,
     ) -> SignalResult:
-        selected_target_dte = (
-            int(target_dte)
-            if target_dte is not None
-            else int(self.config.params["target_dte"])
-        )
-        signal_input = VolSignalInput(
-            symbol=symbol,
-            current_date=current_date,
-            vix=vix,
-            iv_rank=iv_rank,
-            target_dte=selected_target_dte,
-            blackout_dates=tuple(blackout_dates),
-            order_ref_candidate=order_ref_candidate,
-        )
+        if signal_input is None:
+            if current_date is None:
+                raise ValueError("current_date is required when signal_input is not provided")
+            selected_target_dte = (
+                int(target_dte)
+                if target_dte is not None
+                else int(self.config.params["target_dte"])
+            )
+            signal_input = VolSignalInput(
+                symbol=symbol,
+                current_date=current_date,
+                vix=vix,
+                iv_rank=iv_rank,
+                target_dte=selected_target_dte,
+                blackout_dates=tuple(blackout_dates),
+                order_ref_candidate=order_ref_candidate,
+            )
+        else:
+            selected_target_dte = int(signal_input.target_dte)
         result = evaluate_standard_strangle_signal(
             config=self.config,
             state_store=self.state_store,
@@ -81,14 +88,16 @@ class VolSellingEngine(BaseStrategy):
         )
         event_type = "SIGNAL_GENERATED" if result.should_enter else "SIGNAL_SKIPPED"
         payload = {
-            "symbol": symbol,
+            "symbol": signal_input.symbol,
             "target_dte": selected_target_dte,
-            "vix": vix,
-            "iv_rank": iv_rank,
-            "order_ref_candidate": order_ref_candidate,
+            "vix": signal_input.vix,
+            "iv_rank": signal_input.iv_rank,
+            "order_ref_candidate": signal_input.order_ref_candidate,
             "sizing_context": result.sizing_context,
             "risk_context": result.risk_context,
         }
+        if result.should_enter and self.config.strategy_id == S01_VOL_BASELINE:
+            payload["event_detail"] = "S01_VOL_SIGNAL_GENERATED"
         if not result.should_enter:
             payload["skip_reason"] = result.skip_reason
             payload["skip_detail"] = result.skip_detail

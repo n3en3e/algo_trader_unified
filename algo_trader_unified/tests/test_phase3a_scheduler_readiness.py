@@ -9,7 +9,7 @@ import sys
 import tempfile
 import unittest
 from dataclasses import asdict
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from unittest import mock
 
@@ -37,6 +37,7 @@ from algo_trader_unified.core.skip_reasons import (
     SKIP_ACCOUNT_SNAPSHOT_STALE,
     SKIP_BLACKOUT_DATE,
     SKIP_HALTED,
+    SKIP_IV_RANK_BELOW_MIN,
     SKIP_IV_BASELINE_MISSING,
     SKIP_NEEDS_RECONCILIATION,
     SKIP_NLV_DEGRADED,
@@ -49,6 +50,8 @@ from algo_trader_unified.jobs.readiness import (
     all_clear_health_snapshot,
     market_open_scan,
 )
+from algo_trader_unified.jobs.vol import run_s01_vol_scan
+from algo_trader_unified.strategies.vol.signals import SignalResult, VolSignalInput
 from algo_trader_unified.strategies.vol import signals
 
 
@@ -98,7 +101,7 @@ class SchedulerConfigTests(unittest.TestCase):
         for spec in JOB_SPECS.values():
             self.assertEqual(spec.max_instances, DEFAULT_MAX_INSTANCES)
             self.assertEqual(spec.coalesce, DEFAULT_COALESCE)
-        self.assertFalse(JOB_SPECS[JOB_S01_VOL_SCAN].enabled)
+        self.assertTrue(JOB_SPECS[JOB_S01_VOL_SCAN].enabled)
         self.assertFalse(JOB_SPECS[JOB_S02_VOL_SCAN].enabled)
         self.assertFalse(any("0dte" in job_id.lower() for job_id in JOB_SPECS))
 
@@ -253,6 +256,30 @@ class ReadinessManagerTests(TmpCase):
         self.assertTrue(readiness["0dte_jobs_registered"])
         self.assertTrue(readiness["ready_for_entries"])
 
+    def test_s02_legacy_fields_can_be_explicitly_updated(self) -> None:
+        status = asdict(
+            ReadinessStatus(
+                strategy_id=S02_VOL_ENHANCED,
+                ready_for_entries=True,
+                reason=None,
+                checked_at="2026-04-27T13:35:00+00:00",
+                dirty_state=False,
+                unknown_broker_exposure=False,
+                nlv_degraded=False,
+                halt_active=False,
+                calendar_expired=False,
+                iv_baseline_available=True,
+            )
+        )
+        status["standard_strangle_clean_days"] = 7
+        self.state_store.update_readiness(S02_VOL_ENHANCED, status)
+        self.assertEqual(
+            self.state_store.get_readiness(S02_VOL_ENHANCED)[
+                "standard_strangle_clean_days"
+            ],
+            7,
+        )
+
     def test_legacy_top_level_s02_readiness_migrates_to_strategies(self) -> None:
         path = self.root / "legacy_state.json"
         path.write_text(
@@ -283,6 +310,7 @@ class ReadinessManagerTests(TmpCase):
         readiness = store.get_all_readiness()
         self.assertIn("strategies", readiness)
         self.assertIn(S02_VOL_ENHANCED, readiness["strategies"])
+        self.assertNotIn(S02_VOL_ENHANCED, readiness)
         self.assertEqual(
             store.get_readiness(S02_VOL_ENHANCED)["standard_strangle_clean_days"],
             5,
@@ -329,6 +357,7 @@ class MarketOpenScanTests(TmpCase):
         self.assertIsNotNone(self.state_store.get_readiness(S01_VOL_BASELINE))
         s02_readiness = self.state_store.get_readiness(S02_VOL_ENHANCED)
         self.assertIn("standard_strangle_clean_days", s02_readiness)
+        self.assertEqual(s02_readiness["standard_strangle_clean_days"], 0)
         self.assertIn("last_clean_day_date", s02_readiness)
         self.assertIn("last_reconciliation_check", s02_readiness)
         self.assertIn("0dte_jobs_registered", s02_readiness)
@@ -402,6 +431,165 @@ class MarketOpenScanTests(TmpCase):
         self.assertEqual(self.order_ledger_text(), "")
 
 
+class S01VolScanJobTests(TmpCase):
+    def clean_input(self, **overrides) -> VolSignalInput:
+        values = {
+            "symbol": "XSP",
+            "current_date": date(2026, 4, 27),
+            "vix": 18.0,
+            "iv_rank": 45.0,
+            "target_dte": 45,
+            "blackout_dates": (),
+            "order_ref_candidate": "S01|P0427XSP|OPEN",
+        }
+        values.update(overrides)
+        return VolSignalInput(**values)
+
+    def set_readiness(
+        self,
+        strategy_id: str = S01_VOL_BASELINE,
+        *,
+        ready_for_entries: bool,
+        reason: str | None = None,
+    ) -> None:
+        self.manager.update_readiness(
+            ReadinessStatus(
+                strategy_id=strategy_id,
+                ready_for_entries=ready_for_entries,
+                reason=reason,
+                checked_at="2026-04-27T13:35:00+00:00",
+                dirty_state=False,
+                unknown_broker_exposure=False,
+                nlv_degraded=reason == SKIP_NLV_DEGRADED,
+                halt_active=False,
+                calendar_expired=False,
+                iv_baseline_available=True,
+            )
+        )
+
+    def run_job(self, **kwargs):
+        broker = kwargs.pop("broker", mock.Mock())
+        result = run_s01_vol_scan(
+            readiness_manager=self.manager,
+            state_store=self.state_store,
+            ledger=self.ledger,
+            broker=broker,
+            current_time=datetime(2026, 4, 27, 13, 40, tzinfo=timezone.utc),
+            **kwargs,
+        )
+        return result, broker
+
+    def test_readiness_skip_does_not_evaluate_signal(self) -> None:
+        self.set_readiness(ready_for_entries=False, reason=SKIP_NLV_DEGRADED)
+        provider = mock.Mock(return_value=self.clean_input())
+        result, broker = self.run_job(signal_context_provider=provider)
+        events = self.execution_events()
+        self.assertEqual(result.status, "skipped")
+        self.assertEqual(result.detail, "readiness_skipped")
+        provider.assert_not_called()
+        self.assertEqual(events[-1]["event_type"], "SIGNAL_SKIPPED")
+        self.assertEqual(events[-1]["payload"]["gate_name"], "s01_vol_readiness_gate")
+        self.assertEqual(events[-1]["payload"]["skip_reason"], SKIP_NLV_DEGRADED)
+        self.assertEqual(self.order_ledger_text(), "")
+        broker.submit_order.assert_not_called()
+
+    def test_missing_readiness_skips_before_signal_provider(self) -> None:
+        provider = mock.Mock(return_value=self.clean_input())
+        result, broker = self.run_job(signal_context_provider=provider)
+        events = self.execution_events()
+        self.assertEqual(result.status, "skipped")
+        self.assertEqual(result.detail, "readiness_skipped")
+        provider.assert_not_called()
+        self.assertEqual(events[-1]["event_type"], "SIGNAL_SKIPPED")
+        self.assertEqual(events[-1]["payload"]["skip_reason"], SKIP_NEEDS_RECONCILIATION)
+        self.assertEqual(self.order_ledger_text(), "")
+        broker.submit_order.assert_not_called()
+
+    def test_default_context_provider_is_safe_signal_skip(self) -> None:
+        self.set_readiness(ready_for_entries=True)
+        result, broker = self.run_job()
+        events = self.execution_events()
+        self.assertEqual(result.status, "skipped")
+        self.assertEqual(result.detail, "signal_skipped")
+        self.assertIsInstance(result.signal_result, SignalResult)
+        self.assertEqual(events[-1]["event_type"], "SIGNAL_SKIPPED")
+        self.assertEqual(events[-1]["payload"]["skip_reason"], SKIP_IV_RANK_BELOW_MIN)
+        self.assertEqual(self.order_ledger_text(), "")
+        broker.submit_order.assert_not_called()
+
+    def test_signal_skipped_uses_injected_vol_signal_input(self) -> None:
+        self.set_readiness(ready_for_entries=True)
+        signal_input = self.clean_input(iv_rank=0)
+        provider = mock.Mock(return_value=signal_input)
+        with mock.patch(
+            "algo_trader_unified.strategies.vol.engine.VolSellingEngine.create_pending_position"
+        ) as create_pending:
+            result, broker = self.run_job(signal_context_provider=provider)
+        events = self.execution_events()
+        provider.assert_called_once()
+        self.assertIsInstance(provider.return_value, VolSignalInput)
+        self.assertEqual(result.status, "skipped")
+        self.assertEqual(result.detail, "signal_skipped")
+        self.assertIsInstance(result.signal_result, SignalResult)
+        self.assertEqual(events[-1]["event_type"], "SIGNAL_SKIPPED")
+        self.assertEqual(events[-1]["payload"]["skip_reason"], SKIP_IV_RANK_BELOW_MIN)
+        self.assertEqual(events[-1]["payload"]["iv_rank"], 0)
+        self.assertEqual(self.order_ledger_text(), "")
+        create_pending.assert_not_called()
+        broker.submit_order.assert_not_called()
+
+    def test_signal_generated_writes_only_execution_signal(self) -> None:
+        self.set_readiness(ready_for_entries=True)
+        with mock.patch(
+            "algo_trader_unified.strategies.vol.engine.VolSellingEngine.create_pending_position"
+        ) as create_pending:
+            result, broker = self.run_job(signal_context_provider=lambda: self.clean_input())
+        events = self.execution_events()
+        self.assertEqual(result.status, "success")
+        self.assertEqual(result.detail, "signal_generated")
+        self.assertIsInstance(result.signal_result, SignalResult)
+        self.assertEqual(events[-1]["event_type"], "SIGNAL_GENERATED")
+        self.assertEqual(events[-1]["payload"]["event_detail"], "S01_VOL_SIGNAL_GENERATED")
+        self.assertNotIn("OPPORTUNITY" + "_IDENTIFIED", json.dumps(events))
+        self.assertEqual(self.order_ledger_text(), "")
+        create_pending.assert_not_called()
+        broker.submit_order.assert_not_called()
+
+    def test_injected_engine_is_used_without_creating_default_engine(self) -> None:
+        self.set_readiness(ready_for_entries=True)
+        signal_result = SignalResult(
+            should_enter=True,
+            skip_reason=None,
+            skip_detail=None,
+            sizing_context={"capital": 90000.0, "allocation_pct": 0.5},
+            risk_context={"execution_mode": "paper_only", "strategy_id": S01_VOL_BASELINE},
+        )
+        engine = mock.Mock()
+        engine.generate_standard_strangle_signal.return_value = signal_result
+        engine.create_pending_position = mock.Mock()
+        engine.record_close = mock.Mock()
+        with mock.patch("algo_trader_unified.jobs.vol.VolSellingEngine") as default_engine:
+            result, broker = self.run_job(
+                signal_context_provider=lambda: self.clean_input(),
+                engine=engine,
+            )
+        default_engine.assert_not_called()
+        engine.generate_standard_strangle_signal.assert_called_once()
+        engine.create_pending_position.assert_not_called()
+        engine.record_close.assert_not_called()
+        self.assertEqual(result.status, "success")
+        self.assertEqual(result.detail, "signal_generated")
+        self.assertIs(result.signal_result, signal_result)
+        self.assertEqual(self.order_ledger_text(), "")
+        broker.submit_order.assert_not_called()
+
+    def test_s01_only_does_not_modify_s02_readiness(self) -> None:
+        self.set_readiness(ready_for_entries=True)
+        before = self.state_store.get_readiness(S02_VOL_ENHANCED)
+        self.run_job(signal_context_provider=lambda: self.clean_input())
+        self.assertEqual(self.state_store.get_readiness(S02_VOL_ENHANCED), before)
+
+
 class UnifiedSchedulerRunOnceTests(TmpCase):
     def test_market_open_scan_uses_injected_degraded_snapshot(self) -> None:
         scheduler = UnifiedScheduler(
@@ -423,24 +611,125 @@ class UnifiedSchedulerRunOnceTests(TmpCase):
         self.assertEqual(result.status, "skipped")
         self.assertIn("SIGNAL_SKIPPED", (self.root / "data/ledger/execution_ledger.jsonl").read_text())
 
-    def test_stub_and_unknown_jobs(self) -> None:
+    def clean_input(self, **overrides) -> VolSignalInput:
+        values = {
+            "symbol": "XSP",
+            "current_date": date(2026, 4, 27),
+            "vix": 18.0,
+            "iv_rank": 45.0,
+            "target_dte": 45,
+            "blackout_dates": (),
+            "order_ref_candidate": "S01|P0427XSP|OPEN",
+        }
+        values.update(overrides)
+        return VolSignalInput(**values)
+
+    def set_s01_readiness(self, *, ready_for_entries: bool, reason: str | None = None) -> None:
+        self.manager.update_readiness(
+            ReadinessStatus(
+                strategy_id=S01_VOL_BASELINE,
+                ready_for_entries=ready_for_entries,
+                reason=reason,
+                checked_at="2026-04-27T13:35:00+00:00",
+                dirty_state=False,
+                unknown_broker_exposure=False,
+                nlv_degraded=reason == SKIP_NLV_DEGRADED,
+                halt_active=False,
+                calendar_expired=False,
+                iv_baseline_available=True,
+            )
+        )
+
+    def test_s02_stub_and_unknown_jobs(self) -> None:
         scheduler = UnifiedScheduler(
             state_store=self.state_store,
             ledger=self.ledger,
             readiness_manager=self.manager,
         )
-        result = scheduler.run_job_once(JOB_S01_VOL_SCAN)
+        result = scheduler.run_job_once(JOB_S02_VOL_SCAN)
         self.assertEqual(result.status, "skipped")
         self.assertEqual(result.detail, "stub_not_implemented")
         with self.assertRaises(JobNotFoundError):
             scheduler.run_job_once("missing")
 
+    def test_s01_run_once_generates_signal_with_kwargs_overrides(self) -> None:
+        self.set_s01_readiness(ready_for_entries=True)
+        scheduler = UnifiedScheduler(
+            state_store=self.state_store,
+            ledger=self.ledger,
+            readiness_manager=self.manager,
+        )
+        broker = mock.Mock()
+        result = scheduler.run_job_once(
+            JOB_S01_VOL_SCAN,
+            readiness_manager=self.manager,
+            signal_context_provider=lambda: self.clean_input(),
+            broker=broker,
+        )
+        self.assertEqual(result.status, "success")
+        self.assertEqual(result.detail, "signal_generated")
+        self.assertIn("SIGNAL_GENERATED", (self.root / "data/ledger/execution_ledger.jsonl").read_text())
+        broker.submit_order.assert_not_called()
+        broker.placeOrder.assert_not_called()
+        broker.cancelOrder.assert_not_called()
+
+    def test_s01_run_once_does_not_modify_s02_readiness(self) -> None:
+        self.set_s01_readiness(ready_for_entries=True)
+        before = self.state_store.get_readiness(S02_VOL_ENHANCED)
+        scheduler = UnifiedScheduler(
+            state_store=self.state_store,
+            ledger=self.ledger,
+            readiness_manager=self.manager,
+        )
+        result = scheduler.run_job_once(
+            JOB_S01_VOL_SCAN,
+            readiness_manager=self.manager,
+            signal_context_provider=lambda: self.clean_input(),
+            broker=mock.Mock(),
+        )
+        self.assertEqual(result.detail, "signal_generated")
+        self.assertEqual(self.state_store.get_readiness(S02_VOL_ENHANCED), before)
+
+    def test_s01_run_once_readiness_skip_and_signal_skip(self) -> None:
+        scheduler = UnifiedScheduler(
+            state_store=self.state_store,
+            ledger=self.ledger,
+            readiness_manager=self.manager,
+        )
+        broker = mock.Mock()
+        self.set_s01_readiness(ready_for_entries=False, reason=SKIP_NLV_DEGRADED)
+        readiness_result = scheduler.run_job_once(
+            JOB_S01_VOL_SCAN,
+            signal_context_provider=lambda: self.clean_input(),
+            broker=broker,
+        )
+        self.assertEqual(readiness_result.detail, "readiness_skipped")
+        self.set_s01_readiness(ready_for_entries=True)
+        signal_result = scheduler.run_job_once(
+            JOB_S01_VOL_SCAN,
+            signal_context_provider=lambda: self.clean_input(iv_rank=0),
+            broker=broker,
+        )
+        events = self.execution_events()
+        self.assertEqual(signal_result.detail, "signal_skipped")
+        self.assertEqual(events[-1]["payload"]["skip_reason"], SKIP_IV_RANK_BELOW_MIN)
+        self.assertEqual(self.order_ledger_text(), "")
+        broker.submit_order.assert_not_called()
+        broker.placeOrder.assert_not_called()
+        broker.cancelOrder.assert_not_called()
+
     def test_source_has_no_forbidden_lifecycle_calls(self) -> None:
-        source = source_path("core", "scheduler.py").read_text()
+        source = "\n".join(
+            [
+                source_path("core", "scheduler.py").read_text(),
+                source_path("jobs", "vol.py").read_text(),
+            ]
+        )
         for forbidden in (
             "create_pending_position(",
             "execute_close(",
             "confirm_close_fill(",
+            "record_close(",
             "broker.submit_order(",
             "placeOrder(",
             "cancelOrder(",
@@ -484,6 +773,7 @@ class RegressionGuards(unittest.TestCase):
             source_path("core", "scheduler.py"),
             source_path("core", "readiness.py"),
             source_path("jobs", "readiness.py"),
+            source_path("jobs", "vol.py"),
         ]:
             source = module_path.read_text()
             self.assertNotIn(".jsonl", source, module_path)
