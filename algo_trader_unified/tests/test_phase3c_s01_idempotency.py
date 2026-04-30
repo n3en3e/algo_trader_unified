@@ -345,7 +345,7 @@ class S01IdempotencyTests(TmpCase):
             ledger_reader=self.reader(),
             signal_context_provider=lambda: self.clean_input(),
         )
-        self.assertEqual(generated_result.detail, "signal_generated")
+        self.assertEqual(generated_result.detail, "order_intent_created")
         self.assertEqual(self.execution_events()[-1]["event_type"], "SIGNAL_GENERATED")
 
     def test_previous_date_other_strategy_and_other_event_type_do_not_block(self) -> None:
@@ -360,7 +360,9 @@ class S01IdempotencyTests(TmpCase):
                 ledger_reader=self.reader(),
                 signal_context_provider=lambda: self.clean_input(),
             )
-            self.assertEqual(result.detail, "signal_generated")
+            self.assertEqual(result.detail, "order_intent_created")
+            self.state_store.state["order_intents"] = {}
+            self.state_store.save()
 
     def test_missing_root_dir_without_injected_reader_raises(self) -> None:
         ledger = mock.Mock(spec=["append"])
@@ -383,8 +385,8 @@ class S01IdempotencyTests(TmpCase):
             signal_context_provider=lambda: self.clean_input(),
             ledger_reader=self.reader(),
         )
-        self.assertEqual(result.detail, "signal_generated")
-        ledger.append.assert_called_once()
+        self.assertEqual(result.detail, "order_intent_created")
+        self.assertEqual(ledger.append.call_count, 2)
 
 
 class UnifiedSchedulerIdempotencyTests(TmpCase):

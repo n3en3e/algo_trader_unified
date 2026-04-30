@@ -41,6 +41,7 @@ def _fresh_state() -> dict[str, Any]:
         "positions": [],
         "opportunities": [],
         "orders": [],
+        "order_intents": {},
         "fills": [],
         "strategy_snapshots": [],
         "account_snapshots": [],
@@ -93,6 +94,7 @@ class StateStore:
                 f"expected {CURRENT_SCHEMA_VERSION!r}"
             )
         self._normalize_readiness(payload)
+        payload.setdefault("order_intents", {})
         return payload
 
     @staticmethod
@@ -165,6 +167,47 @@ class StateStore:
             existing.update(deepcopy(readiness_status))
             strategies[strategy_id] = existing
             self.save()
+
+    def create_order_intent(self, intent_record: dict[str, Any]) -> dict[str, Any]:
+        strategy_id = intent_record.get("strategy_id")
+        intent_id = intent_record.get("intent_id")
+        if not isinstance(strategy_id, str) or not strategy_id:
+            raise ValueError("order intent strategy_id is required")
+        if not isinstance(intent_id, str) or not intent_id:
+            raise ValueError("order intent intent_id is required")
+        with self.get_strategy_lock(strategy_id):
+            intents = self.state.setdefault("order_intents", {})
+            intents[intent_id] = deepcopy(intent_record)
+            self.save()
+            return deepcopy(intents[intent_id])
+
+    def get_order_intent(self, intent_id: str) -> dict[str, Any] | None:
+        intent = self.state.setdefault("order_intents", {}).get(intent_id)
+        if intent is None:
+            return None
+        return deepcopy(intent)
+
+    def get_active_order_intent(self, strategy_id: str) -> dict[str, Any] | None:
+        active_statuses = {"created"}
+        with self.get_strategy_lock(strategy_id):
+            for intent in self.state.setdefault("order_intents", {}).values():
+                if not isinstance(intent, dict):
+                    continue
+                if intent.get("strategy_id") != strategy_id:
+                    continue
+                if intent.get("status") in active_statuses:
+                    return deepcopy(intent)
+        return None
+
+    def list_order_intents(self, strategy_id: str | None = None) -> list[dict[str, Any]]:
+        intents = self.state.setdefault("order_intents", {}).values()
+        records = [
+            deepcopy(intent)
+            for intent in intents
+            if isinstance(intent, dict)
+            and (strategy_id is None or intent.get("strategy_id") == strategy_id)
+        ]
+        return records
 
     def get_all_readiness(self) -> dict[str, Any]:
         return deepcopy(self.state.setdefault("readiness", {}))

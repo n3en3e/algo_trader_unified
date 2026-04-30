@@ -29,6 +29,7 @@ from algo_trader_unified.strategies.vol.signals import (
     VolSignalInput,
     evaluate_management_signal,
     evaluate_standard_strangle_signal,
+    signal_generated_detail,
 )
 
 
@@ -38,11 +39,6 @@ class InvalidSignalError(RuntimeError):
 
 class LifecycleTransitionError(RuntimeError):
     """Raised when a position lifecycle transition is invalid."""
-
-
-def _signal_generated_detail(config: StrategyVariantConfig) -> str:
-    strategy_prefix = config.strategy_id.split("_", 1)[0]
-    return f"{strategy_prefix}_VOL_SIGNAL_GENERATED"
 
 
 @dataclass
@@ -64,6 +60,7 @@ class VolSellingEngine(BaseStrategy):
         target_dte: int | None = None,
         blackout_dates: Iterable[date] = (),
         order_ref_candidate: str | None = None,
+        log_to_ledger: bool = True,
     ) -> SignalResult:
         if signal_input is None:
             if current_date is None:
@@ -101,19 +98,20 @@ class VolSellingEngine(BaseStrategy):
             "risk_context": result.risk_context,
         }
         if result.should_enter:
-            payload["event_detail"] = _signal_generated_detail(self.config)
+            payload["event_detail"] = signal_generated_detail(self.config)
         if not result.should_enter:
             payload["skip_reason"] = result.skip_reason
             payload["skip_detail"] = result.skip_detail
-        self.ledger.append(
-            event_type=event_type,
-            strategy_id=self.config.strategy_id,
-            execution_mode=self.config.execution_mode,
-            source_module="strategies.vol.engine",
-            position_id=None,
-            opportunity_id=None,
-            payload=payload,
-        )
+        if log_to_ledger:
+            self.ledger.append(
+                event_type=event_type,
+                strategy_id=self.config.strategy_id,
+                execution_mode=self.config.execution_mode,
+                source_module="strategies.vol.engine",
+                position_id=None,
+                opportunity_id=None,
+                payload=payload,
+            )
         return result
 
     def evaluate_management_signal(

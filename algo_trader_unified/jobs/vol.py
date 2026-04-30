@@ -11,12 +11,17 @@ from algo_trader_unified.config.variants import S01_CONFIG, S02_CONFIG, Strategy
 from algo_trader_unified.core.ledger_reader import LedgerReader, LedgerReadError
 from algo_trader_unified.core.readiness import ReadinessManager, ReadinessStatus
 from algo_trader_unified.core.skip_reasons import (
+    SKIP_ACTIVE_ORDER_INTENT,
     SKIP_ALREADY_SIGNALED_TODAY,
     SKIP_NEEDS_RECONCILIATION,
 )
 from algo_trader_unified.strategies.base import Phase2ARiskManagerStub
 from algo_trader_unified.strategies.vol.engine import VolSellingEngine
-from algo_trader_unified.strategies.vol.signals import SignalResult, VolSignalInput
+from algo_trader_unified.strategies.vol.signals import (
+    SignalResult,
+    VolSignalInput,
+    signal_generated_detail,
+)
 
 
 @dataclass(frozen=True)
@@ -26,6 +31,8 @@ class VolScanJobResult:
     status: str
     detail: str
     signal_result: SignalResult | None = None
+    order_intent_id: str | None = None
+    order_intent_created_event_id: str | None = None
 
 
 SignalContextProvider = Callable[[], VolSignalInput]
@@ -95,6 +102,69 @@ def _readiness_skip_detail(config: StrategyVariantConfig) -> str:
     return f"{config.strategy_id} vol readiness gate blocked entries"
 
 
+def _signal_payload(
+    *,
+    config: StrategyVariantConfig,
+    signal_input: VolSignalInput,
+    signal_result: SignalResult,
+) -> dict:
+    payload = {
+        "symbol": signal_input.symbol,
+        "target_dte": int(signal_input.target_dte),
+        "vix": signal_input.vix,
+        "iv_rank": signal_input.iv_rank,
+        "order_ref_candidate": signal_input.order_ref_candidate,
+        "sizing_context": signal_result.sizing_context,
+        "risk_context": signal_result.risk_context,
+    }
+    if signal_result.should_enter:
+        payload["event_detail"] = signal_generated_detail(config)
+    else:
+        payload["skip_reason"] = signal_result.skip_reason
+        payload["skip_detail"] = signal_result.skip_detail
+    return payload
+
+
+def _active_order_intent_skip_payload(config: StrategyVariantConfig) -> dict:
+    return {
+        "strategy_id": config.strategy_id,
+        "sleeve_id": config.sleeve_id,
+        "skip_reason": SKIP_ACTIVE_ORDER_INTENT,
+        "skip_detail": f"{config.strategy_id} already has an active order intent",
+        "gate_name": "vol_order_intent_gate",
+        "execution_mode": config.execution_mode,
+    }
+
+
+def _append_active_order_intent_skip(*, config: StrategyVariantConfig, ledger) -> None:
+    ledger.append(
+        event_type="SIGNAL_SKIPPED",
+        strategy_id=config.strategy_id,
+        execution_mode=config.execution_mode,
+        source_module="jobs.vol",
+        payload=_active_order_intent_skip_payload(config),
+    )
+
+
+def _intent_id_for_signal(
+    *,
+    config: StrategyVariantConfig,
+    source_signal_event_id: str,
+) -> str:
+    return f"{config.strategy_id}:{source_signal_event_id}"
+
+
+def _order_ref_for_signal(
+    *,
+    config: StrategyVariantConfig,
+    signal_input: VolSignalInput,
+    source_signal_event_id: str,
+) -> str:
+    if signal_input.order_ref_candidate and signal_input.order_ref_candidate.strip():
+        return signal_input.order_ref_candidate.strip()
+    return f"{config.strategy_id}|{source_signal_event_id}|OPEN"
+
+
 def run_vol_scan(
     *,
     config: StrategyVariantConfig,
@@ -110,6 +180,16 @@ def run_vol_scan(
 ) -> VolScanJobResult:
     now = current_time or datetime.now(timezone.utc)
     job_id = _job_id_for_config(config)
+    with state_store.get_strategy_lock(config.strategy_id):
+        if state_store.get_active_order_intent(config.strategy_id) is not None:
+            _append_active_order_intent_skip(config=config, ledger=ledger)
+            return VolScanJobResult(
+                job_id=job_id,
+                strategy_id=config.strategy_id,
+                status="skipped",
+                detail="active_order_intent",
+            )
+
     if ledger_reader is None:
         if not hasattr(ledger, "root_dir"):
             raise LedgerReadError(
@@ -186,22 +266,121 @@ def run_vol_scan(
         broker=broker,
         risk_manager=risk_manager or Phase2ARiskManagerStub(),
     )
-    signal_result = vol_engine.generate_standard_strangle_signal(signal_input)
-    if signal_result.should_enter:
+    signal_result = vol_engine.generate_standard_strangle_signal(
+        signal_input,
+        log_to_ledger=False,
+    )
+    signal_payload = _signal_payload(
+        config=config,
+        signal_input=signal_input,
+        signal_result=signal_result,
+    )
+    # jobs.vol owns ledger attribution for scheduler-driven vol scans because
+    # the engine evaluates the signal with log_to_ledger=False.
+    if not signal_result.should_enter:
+        ledger.append(
+            event_type="SIGNAL_SKIPPED",
+            strategy_id=config.strategy_id,
+            execution_mode=config.execution_mode,
+            source_module="jobs.vol",
+            position_id=None,
+            opportunity_id=None,
+            payload=signal_payload,
+        )
+        return VolScanJobResult(
+            job_id=job_id,
+            strategy_id=config.strategy_id,
+            status="skipped",
+            detail="signal_skipped",
+            signal_result=signal_result,
+        )
+
+    source_signal_event_id = str(
+        ledger.append(
+            event_type="SIGNAL_GENERATED",
+            strategy_id=config.strategy_id,
+            execution_mode=config.execution_mode,
+            source_module="jobs.vol",
+            position_id=None,
+            opportunity_id=None,
+            payload=signal_payload,
+        )
+    )
+
+    with state_store.get_strategy_lock(config.strategy_id):
+        if state_store.get_active_order_intent(config.strategy_id) is not None:
+            _append_active_order_intent_skip(config=config, ledger=ledger)
+            return VolScanJobResult(
+                job_id=job_id,
+                strategy_id=config.strategy_id,
+                status="skipped",
+                detail="active_order_intent",
+                signal_result=signal_result,
+            )
+        created_at = now.isoformat()
+        order_ref = _order_ref_for_signal(
+            config=config,
+            signal_input=signal_input,
+            source_signal_event_id=source_signal_event_id,
+        )
+        intent_id = _intent_id_for_signal(
+            config=config,
+            source_signal_event_id=source_signal_event_id,
+        )
+        order_intent_payload = {
+            "intent_id": intent_id,
+            "strategy_id": config.strategy_id,
+            "sleeve_id": config.sleeve_id,
+            "symbol": signal_input.symbol,
+            "execution_mode": config.execution_mode,
+            "source_signal_event_id": source_signal_event_id,
+            "order_ref": order_ref,
+            "intent_status": "created",
+            "created_at": created_at,
+            "event_detail": "ORDER_INTENT_CREATED",
+            "sizing_context": signal_result.sizing_context,
+            "risk_context": signal_result.risk_context,
+            "signal_payload_snapshot": signal_payload,
+            "dry_run": True,
+        }
+        order_intent_created_event_id = str(
+            ledger.append(
+                event_type="ORDER_INTENT_CREATED",
+                strategy_id=config.strategy_id,
+                execution_mode=config.execution_mode,
+                source_module="jobs.vol",
+                position_id=None,
+                opportunity_id=None,
+                payload=order_intent_payload,
+            )
+        )
+        intent_record = {
+            "intent_id": intent_id,
+            "strategy_id": config.strategy_id,
+            "sleeve_id": config.sleeve_id,
+            "symbol": signal_input.symbol,
+            "execution_mode": config.execution_mode,
+            "status": "created",
+            "source_signal_event_id": source_signal_event_id,
+            "order_intent_created_event_id": order_intent_created_event_id,
+            "order_ref": order_ref,
+            "created_at": created_at,
+            "updated_at": created_at,
+            "sizing_context": signal_result.sizing_context,
+            "risk_context": signal_result.risk_context,
+            "signal_payload_snapshot": signal_payload,
+            "dry_run": True,
+        }
+        state_store.create_order_intent(intent_record)
         return VolScanJobResult(
             job_id=job_id,
             strategy_id=config.strategy_id,
             status="success",
-            detail="signal_generated",
+            detail="order_intent_created",
             signal_result=signal_result,
+            order_intent_id=intent_id,
+            order_intent_created_event_id=order_intent_created_event_id,
         )
-    return VolScanJobResult(
-        job_id=job_id,
-        strategy_id=config.strategy_id,
-        status="skipped",
-        detail="signal_skipped",
-        signal_result=signal_result,
-    )
 
 
 def run_s01_vol_scan(

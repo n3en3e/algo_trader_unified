@@ -94,6 +94,21 @@ class LedgerTests(TmpCase):
             )
         self.assertEqual(before, order_path.read_text())
 
+    def test_expected_ledger_wrong_name_raises_before_write(self) -> None:
+        ledger = LedgerAppender(self.root)
+        execution_path = self.root / "data/ledger/execution_ledger.jsonl"
+        before = execution_path.read_text()
+        with self.assertRaises(LedgerValidationError):
+            ledger.append(
+                event_type="SIGNAL_GENERATED",
+                strategy_id="S01_VOL_BASELINE",
+                execution_mode="paper_only",
+                source_module="test",
+                payload={},
+                expected_ledger="order_ledger.jsonl",
+            )
+        self.assertEqual(before, execution_path.read_text())
+
     def test_unknown_event_type_raises_before_write(self) -> None:
         ledger = LedgerAppender(self.root)
         exec_path = self.root / "data/ledger/execution_ledger.jsonl"

@@ -46,6 +46,11 @@ ALLOWED_MANAGEMENT_ACTIONS = {
 }
 
 
+def signal_generated_detail(config: StrategyVariantConfig) -> str:
+    strategy_prefix = config.strategy_id.split("_", 1)[0]
+    return f"{strategy_prefix}_VOL_SIGNAL_GENERATED"
+
+
 @dataclass(frozen=True)
 class VolSignalInput:
     symbol: str

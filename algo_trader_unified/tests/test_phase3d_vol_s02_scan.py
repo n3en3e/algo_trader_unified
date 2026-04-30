@@ -270,18 +270,18 @@ class S02DryRunVolScanTests(TmpCase):
         broker.placeOrder.assert_not_called()
         broker.cancelOrder.assert_not_called()
 
-    def test_s02_clean_signal_writes_signal_generated_only(self) -> None:
+    def test_s02_clean_signal_creates_order_intent(self) -> None:
         self.set_readiness(S02_VOL_ENHANCED, ready_for_entries=True)
         result, broker = self.run_s02(signal_context_provider=lambda: self.clean_input())
         events = self.execution_events()
         self.assertEqual(result.status, "success")
-        self.assertEqual(result.detail, "signal_generated")
+        self.assertEqual(result.detail, "order_intent_created")
         self.assertEqual(events[-1]["event_type"], "SIGNAL_GENERATED")
         self.assertEqual(events[-1]["strategy_id"], S02_VOL_ENHANCED)
         self.assertEqual(events[-1]["payload"]["event_detail"], "S02_VOL_SIGNAL_GENERATED")
         self.assertIn("sizing_context", events[-1]["payload"])
         self.assertIn("risk_context", events[-1]["payload"])
-        self.assertEqual(self.order_path.read_text(encoding="utf-8"), "")
+        self.assertIn("ORDER_INTENT_CREATED", self.order_path.read_text(encoding="utf-8"))
         broker.submit_order.assert_not_called()
 
     def test_s02_default_reader_path_without_injected_reader(self) -> None:
@@ -297,10 +297,10 @@ class S02DryRunVolScanTests(TmpCase):
         )
         events = self.execution_events()
         self.assertEqual(result.status, "success")
-        self.assertEqual(result.detail, "signal_generated")
+        self.assertEqual(result.detail, "order_intent_created")
         self.assertEqual([event["event_type"] for event in events], ["SIGNAL_GENERATED"])
         self.assertEqual(events[-1]["strategy_id"], S02_VOL_ENHANCED)
-        self.assertEqual(self.order_path.read_text(encoding="utf-8"), "")
+        self.assertIn("ORDER_INTENT_CREATED", self.order_path.read_text(encoding="utf-8"))
         broker.submit_order.assert_not_called()
 
     def test_s02_duplicate_same_day_skips_before_signal_provider(self) -> None:
@@ -335,14 +335,14 @@ class S02DryRunVolScanTests(TmpCase):
             ledger_reader=self.reader(),
             signal_context_provider=lambda: self.clean_input(S02_VOL_ENHANCED),
         )
-        self.assertEqual(s02_result.detail, "signal_generated")
+        self.assertEqual(s02_result.detail, "order_intent_created")
 
         self.write_execution_events(ledger_event(strategy_id=S02_VOL_ENHANCED))
         s01_result, _broker = self.run_s01(
             ledger_reader=self.reader(),
             signal_context_provider=lambda: self.clean_input(S01_VOL_BASELINE),
         )
-        self.assertEqual(s01_result.detail, "signal_generated")
+        self.assertEqual(s01_result.detail, "order_intent_created")
 
     def test_s01_s02_readiness_is_isolated(self) -> None:
         self.set_readiness(S01_VOL_BASELINE, ready_for_entries=True)
@@ -386,7 +386,7 @@ class UnifiedSchedulerS02Tests(TmpCase):
             broker=broker,
         )
         self.assertEqual(result.status, "success")
-        self.assertEqual(result.detail, "signal_generated")
+        self.assertEqual(result.detail, "order_intent_created")
         self.assertEqual(self.execution_events()[-1]["event_type"], "SIGNAL_GENERATED")
         broker.submit_order.assert_not_called()
         broker.placeOrder.assert_not_called()

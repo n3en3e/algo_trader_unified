@@ -538,7 +538,7 @@ class S01VolScanJobTests(TmpCase):
         create_pending.assert_not_called()
         broker.submit_order.assert_not_called()
 
-    def test_signal_generated_writes_only_execution_signal(self) -> None:
+    def test_signal_generated_creates_order_intent(self) -> None:
         self.set_readiness(ready_for_entries=True)
         with mock.patch(
             "algo_trader_unified.strategies.vol.engine.VolSellingEngine.create_pending_position"
@@ -546,12 +546,12 @@ class S01VolScanJobTests(TmpCase):
             result, broker = self.run_job(signal_context_provider=lambda: self.clean_input())
         events = self.execution_events()
         self.assertEqual(result.status, "success")
-        self.assertEqual(result.detail, "signal_generated")
+        self.assertEqual(result.detail, "order_intent_created")
         self.assertIsInstance(result.signal_result, SignalResult)
         self.assertEqual(events[-1]["event_type"], "SIGNAL_GENERATED")
         self.assertEqual(events[-1]["payload"]["event_detail"], "S01_VOL_SIGNAL_GENERATED")
         self.assertNotIn("OPPORTUNITY" + "_IDENTIFIED", json.dumps(events))
-        self.assertEqual(self.order_ledger_text(), "")
+        self.assertIn("ORDER_INTENT_CREATED", self.order_ledger_text())
         create_pending.assert_not_called()
         broker.submit_order.assert_not_called()
 
@@ -578,9 +578,9 @@ class S01VolScanJobTests(TmpCase):
         engine.create_pending_position.assert_not_called()
         engine.record_close.assert_not_called()
         self.assertEqual(result.status, "success")
-        self.assertEqual(result.detail, "signal_generated")
+        self.assertEqual(result.detail, "order_intent_created")
         self.assertIs(result.signal_result, signal_result)
-        self.assertEqual(self.order_ledger_text(), "")
+        self.assertIn("ORDER_INTENT_CREATED", self.order_ledger_text())
         broker.submit_order.assert_not_called()
 
     def test_s01_only_does_not_modify_s02_readiness(self) -> None:
@@ -667,7 +667,7 @@ class UnifiedSchedulerRunOnceTests(TmpCase):
             broker=broker,
         )
         self.assertEqual(result.status, "success")
-        self.assertEqual(result.detail, "signal_generated")
+        self.assertEqual(result.detail, "order_intent_created")
         self.assertIn("SIGNAL_GENERATED", (self.root / "data/ledger/execution_ledger.jsonl").read_text())
         broker.submit_order.assert_not_called()
         broker.placeOrder.assert_not_called()
@@ -687,7 +687,7 @@ class UnifiedSchedulerRunOnceTests(TmpCase):
             signal_context_provider=lambda: self.clean_input(),
             broker=mock.Mock(),
         )
-        self.assertEqual(result.detail, "signal_generated")
+        self.assertEqual(result.detail, "order_intent_created")
         self.assertEqual(self.state_store.get_readiness(S02_VOL_ENHANCED), before)
 
     def test_s01_run_once_readiness_skip_and_signal_skip(self) -> None:

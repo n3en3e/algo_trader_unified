@@ -19,6 +19,7 @@ from algo_trader_unified.core.ledger_paths import (
 
 
 ORDER_LEDGER_EVENTS = {
+    "ORDER_INTENT_CREATED",
     "ORDER_SUBMITTED",
     "ORDER_CONFIRMED",
     "ORDER_CANCEL_REQUESTED",
@@ -50,6 +51,14 @@ class LedgerInitError(RuntimeError):
 
 class LedgerValidationError(ValueError):
     """Raised when a ledger event envelope is invalid."""
+
+
+class LedgerEventId(str):
+    """String event id with legacy ``.event_id`` access."""
+
+    @property
+    def event_id(self) -> str:
+        return str(self)
 
 
 @dataclass(frozen=True)
@@ -108,7 +117,7 @@ class LedgerAppender:
         event_id: str | None = None,
         timestamp: str | None = None,
         expected_ledger: str | None = None,
-    ) -> LedgerEvent:
+    ) -> LedgerEventId:
         path = self.path_for_event_type(event_type)
         if expected_ledger is not None and path.name != expected_ledger:
             raise LedgerValidationError(
@@ -132,7 +141,7 @@ class LedgerAppender:
                 handle.write(line + "\n")
                 handle.flush()
                 os.fsync(handle.fileno())
-        return event
+        return LedgerEventId(event.event_id)
 
     def _validate_event(self, event: LedgerEvent) -> None:
         if event.event_type not in KNOWN_EVENT_TYPES:
