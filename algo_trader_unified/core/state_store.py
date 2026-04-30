@@ -179,9 +179,12 @@ class StateStore:
             raise ValueError("order intent strategy_id is required")
         if not isinstance(intent_id, str) or not intent_id:
             raise ValueError("order intent intent_id is required")
+        record = deepcopy(intent_record)
+        if "dry_run" not in record:
+            record["dry_run"] = record.get("execution_mode") != "live_enabled"
         with self.get_strategy_lock(strategy_id):
             intents = self.state.setdefault("order_intents", {})
-            intents[intent_id] = deepcopy(intent_record)
+            intents[intent_id] = record
             self.save()
             return deepcopy(intents[intent_id])
 
@@ -253,6 +256,27 @@ class StateStore:
                 "cancelled_at": cancelled_at,
                 "cancel_reason": cancel_reason,
                 "cancelled_event_id": cancelled_event_id,
+            },
+        )
+
+    def submit_order_intent(
+        self,
+        intent_id: str,
+        *,
+        submitted_at: str,
+        order_submitted_event_id: str,
+        simulated_order_id: str,
+        dry_run: bool = True,
+    ) -> dict[str, Any]:
+        return self._transition_created_order_intent(
+            intent_id,
+            new_status="submitted",
+            updated_at=submitted_at,
+            fields={
+                "submitted_at": submitted_at,
+                "order_submitted_event_id": order_submitted_event_id,
+                "simulated_order_id": simulated_order_id,
+                "dry_run": dry_run,
             },
         )
 

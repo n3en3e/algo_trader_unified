@@ -155,10 +155,13 @@ class StateStoreOrderIntentTests(TmpCase):
         )
         self.assertEqual(len(self.state_store.list_order_intents()), 2)
         self.assertEqual(len(self.state_store.list_order_intents(S01_VOL_BASELINE)), 1)
-        self.assertNotIn("dry_run", self.state_store.get_order_intent("s01:intent"))
+        self.assertTrue(self.state_store.get_order_intent("s01:intent")["dry_run"])
 
     def test_legacy_intent_without_dry_run_remains_readable(self) -> None:
-        self.create_intent(S01_VOL_BASELINE, "legacy:intent")
+        legacy = self.create_intent(S01_VOL_BASELINE, "legacy:intent")
+        del legacy["dry_run"]
+        self.state_store.state["order_intents"]["legacy:intent"] = legacy
+        self.state_store.save()
         self.assertNotIn("dry_run", self.state_store.get_order_intent("legacy:intent"))
         self.assertEqual(
             self.state_store.get_active_order_intent(S01_VOL_BASELINE)["intent_id"],

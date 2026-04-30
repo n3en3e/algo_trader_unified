@@ -135,3 +135,59 @@ def cancel_order_intent(
         cancel_reason=cancel_reason,
         cancelled_event_id=event_id,
     )
+
+
+def submit_order_intent(
+    *,
+    state_store,
+    ledger,
+    execution_adapter,
+    intent_id: str,
+    submitted_at: str,
+) -> dict[str, Any]:
+    intent = _require_created_intent(state_store, intent_id)
+    if "dry_run" not in intent:
+        raise ValueError(
+            f"order intent {intent_id!r} is missing intent.dry_run; Phase 3G requires dry_run=True"
+        )
+    if intent["dry_run"] is not True:
+        raise ValueError(
+            f"order intent {intent_id!r} has dry_run={intent['dry_run']!r}; Phase 3G requires dry_run=True"
+        )
+
+    submission = execution_adapter.submit_order_intent(
+        intent,
+        submitted_at=submitted_at,
+    )
+    event_id = str(
+        ledger.append(
+            event_type="ORDER_SUBMITTED",
+            strategy_id=intent["strategy_id"],
+            execution_mode=intent["execution_mode"],
+            source_module="core.order_intents",
+            payload={
+                "intent_id": intent_id,
+                "strategy_id": intent["strategy_id"],
+                "sleeve_id": intent.get("sleeve_id"),
+                "symbol": intent.get("symbol"),
+                "execution_mode": intent["execution_mode"],
+                "order_ref": intent.get("order_ref"),
+                "source_signal_event_id": intent.get("source_signal_event_id"),
+                "order_intent_created_event_id": intent.get(
+                    "order_intent_created_event_id"
+                ),
+                "submitted_at": submitted_at,
+                "dry_run": True,
+                "simulated_order_id": submission["simulated_order_id"],
+                "action": "open",
+                "event_detail": "ORDER_SUBMITTED",
+            },
+        )
+    )
+    return state_store.submit_order_intent(
+        intent_id,
+        submitted_at=submitted_at,
+        order_submitted_event_id=event_id,
+        simulated_order_id=submission["simulated_order_id"],
+        dry_run=True,
+    )
