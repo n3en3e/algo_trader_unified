@@ -221,6 +221,39 @@ class StateStore:
             self.save()
             return deepcopy(updated)
 
+    def _transition_submitted_order_intent(
+        self,
+        intent_id: str,
+        *,
+        new_status: str,
+        updated_at: str,
+        fields: dict[str, Any],
+    ) -> dict[str, Any]:
+        intents = self.state.setdefault("order_intents", {})
+        intent = intents.get(intent_id)
+        if intent is None:
+            raise KeyError(f"order intent {intent_id!r} does not exist")
+        if not isinstance(intent, dict):
+            raise OrderIntentTransitionError(f"order intent {intent_id!r} is malformed")
+        strategy_id = intent.get("strategy_id")
+        if not isinstance(strategy_id, str) or not strategy_id:
+            raise OrderIntentTransitionError(f"order intent {intent_id!r} has no strategy_id")
+        with self.get_strategy_lock(strategy_id):
+            current = intents.get(intent_id)
+            if current is None:
+                raise KeyError(f"order intent {intent_id!r} does not exist")
+            if current.get("status") != "submitted":
+                raise OrderIntentTransitionError(
+                    f"order intent {intent_id!r} status is {current.get('status')!r}, not 'submitted'"
+                )
+            updated = deepcopy(current)
+            updated.update(deepcopy(fields))
+            updated["status"] = new_status
+            updated["updated_at"] = updated_at
+            intents[intent_id] = updated
+            self.save()
+            return deepcopy(updated)
+
     def expire_order_intent(
         self,
         intent_id: str,
@@ -275,6 +308,27 @@ class StateStore:
             fields={
                 "submitted_at": submitted_at,
                 "order_submitted_event_id": order_submitted_event_id,
+                "simulated_order_id": simulated_order_id,
+                "dry_run": dry_run,
+            },
+        )
+
+    def confirm_order_intent(
+        self,
+        intent_id: str,
+        *,
+        confirmed_at: str,
+        order_confirmed_event_id: str,
+        simulated_order_id: str,
+        dry_run: bool = True,
+    ) -> dict[str, Any]:
+        return self._transition_submitted_order_intent(
+            intent_id,
+            new_status="confirmed",
+            updated_at=confirmed_at,
+            fields={
+                "confirmed_at": confirmed_at,
+                "order_confirmed_event_id": order_confirmed_event_id,
                 "simulated_order_id": simulated_order_id,
                 "dry_run": dry_run,
             },

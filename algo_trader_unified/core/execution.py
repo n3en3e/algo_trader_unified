@@ -18,6 +18,19 @@ class DryRunOrderSubmission(TypedDict):
     status: str
 
 
+class DryRunOrderStatus(TypedDict):
+    dry_run: bool
+    simulated_order_id: str
+    checked_at: str
+    confirmed_at: str
+    intent_id: str
+    strategy_id: str
+    symbol: str | None
+    order_ref: str | None
+    status: str
+    action: str
+
+
 class DryRunExecutionAdapter:
     """Pure adapter that simulates submission for order-intent lifecycle tests."""
 
@@ -43,4 +56,24 @@ class DryRunExecutionAdapter:
             "symbol": intent.get("symbol"),
             "action": "open",
             "status": "submitted",
+        }
+
+    def check_order_status(
+        self,
+        *,
+        simulated_order_id: str,
+        intent: dict[str, Any],
+        checked_at: str,
+    ) -> DryRunOrderStatus:
+        return {
+            "dry_run": True,
+            "simulated_order_id": simulated_order_id,
+            "checked_at": checked_at,
+            "confirmed_at": checked_at,
+            "intent_id": intent["intent_id"],
+            "strategy_id": intent["strategy_id"],
+            "symbol": intent.get("symbol"),
+            "order_ref": intent.get("order_ref"),
+            "status": "confirmed",
+            "action": "open",
         }
