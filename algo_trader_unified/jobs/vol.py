@@ -6,14 +6,21 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Callable
 
+from algo_trader_unified.config.risk import ORDER_INTENT_TTL_MINUTES
 from algo_trader_unified.config.scheduler import JOB_S01_VOL_SCAN, JOB_S02_VOL_SCAN
 from algo_trader_unified.config.variants import S01_CONFIG, S02_CONFIG, StrategyVariantConfig
 from algo_trader_unified.core.ledger_reader import LedgerReader, LedgerReadError
+from algo_trader_unified.core.order_intents import (
+    expire_order_intent,
+    is_order_intent_stale,
+    order_intent_age_minutes,
+)
 from algo_trader_unified.core.readiness import ReadinessManager, ReadinessStatus
 from algo_trader_unified.core.skip_reasons import (
     SKIP_ACTIVE_ORDER_INTENT,
     SKIP_ALREADY_SIGNALED_TODAY,
     SKIP_NEEDS_RECONCILIATION,
+    SKIP_STALE_ORDER_INTENT,
 )
 from algo_trader_unified.strategies.base import Phase2ARiskManagerStub
 from algo_trader_unified.strategies.vol.engine import VolSellingEngine
@@ -146,6 +153,100 @@ def _append_active_order_intent_skip(*, config: StrategyVariantConfig, ledger) -
     )
 
 
+def _stale_order_intent_skip_payload(
+    *,
+    config: StrategyVariantConfig,
+    intent: dict,
+    age_minutes: float,
+    ttl_minutes: int,
+    expired_event_id: str,
+) -> dict:
+    return {
+        "strategy_id": config.strategy_id,
+        "sleeve_id": config.sleeve_id,
+        "execution_mode": config.execution_mode,
+        "skip_reason": SKIP_STALE_ORDER_INTENT,
+        "gate_name": "vol_order_intent_ttl_gate",
+        "intent_id": intent["intent_id"],
+        "age_minutes": age_minutes,
+        "ttl_minutes": ttl_minutes,
+        "expired_event_id": expired_event_id,
+        "skip_detail": f"{config.strategy_id} stale order intent expired",
+    }
+
+
+def _append_stale_order_intent_skip(
+    *,
+    config: StrategyVariantConfig,
+    ledger,
+    intent: dict,
+    age_minutes: float,
+    ttl_minutes: int,
+    expired_event_id: str,
+) -> None:
+    ledger.append(
+        event_type="SIGNAL_SKIPPED",
+        strategy_id=config.strategy_id,
+        execution_mode=config.execution_mode,
+        source_module="jobs.vol",
+        payload=_stale_order_intent_skip_payload(
+            config=config,
+            intent=intent,
+            age_minutes=age_minutes,
+            ttl_minutes=ttl_minutes,
+            expired_event_id=expired_event_id,
+        ),
+    )
+
+
+def _handle_active_order_intent(
+    *,
+    config: StrategyVariantConfig,
+    state_store,
+    ledger,
+    now: datetime,
+    ttl_minutes: int,
+    job_id: str,
+    signal_result: SignalResult | None = None,
+) -> VolScanJobResult | None:
+    active_intent = state_store.get_active_order_intent(config.strategy_id)
+    if active_intent is None:
+        return None
+    if not is_order_intent_stale(active_intent, now=now, ttl_minutes=ttl_minutes):
+        _append_active_order_intent_skip(config=config, ledger=ledger)
+        return VolScanJobResult(
+            job_id=job_id,
+            strategy_id=config.strategy_id,
+            status="skipped",
+            detail="active_order_intent",
+            signal_result=signal_result,
+        )
+
+    age_minutes = order_intent_age_minutes(active_intent, now=now)
+    updated_intent = expire_order_intent(
+        state_store=state_store,
+        ledger=ledger,
+        intent_id=active_intent["intent_id"],
+        expired_at=now.isoformat(),
+        expire_reason="ttl_expired",
+    )
+    _append_stale_order_intent_skip(
+        config=config,
+        ledger=ledger,
+        intent=active_intent,
+        age_minutes=age_minutes,
+        ttl_minutes=ttl_minutes,
+        expired_event_id=updated_intent["expired_event_id"],
+    )
+    return VolScanJobResult(
+        job_id=job_id,
+        strategy_id=config.strategy_id,
+        status="skipped",
+        detail="stale_order_intent_expired",
+        signal_result=signal_result,
+    )
+
+
 def _intent_id_for_signal(
     *,
     config: StrategyVariantConfig,
@@ -177,18 +278,21 @@ def run_vol_scan(
     signal_context_provider: SignalContextProvider | None = None,
     engine: VolSellingEngine | None = None,
     ledger_reader: LedgerReader | None = None,
+    order_intent_ttl_minutes: int = ORDER_INTENT_TTL_MINUTES,
 ) -> VolScanJobResult:
     now = current_time or datetime.now(timezone.utc)
     job_id = _job_id_for_config(config)
     with state_store.get_strategy_lock(config.strategy_id):
-        if state_store.get_active_order_intent(config.strategy_id) is not None:
-            _append_active_order_intent_skip(config=config, ledger=ledger)
-            return VolScanJobResult(
-                job_id=job_id,
-                strategy_id=config.strategy_id,
-                status="skipped",
-                detail="active_order_intent",
-            )
+        active_result = _handle_active_order_intent(
+            config=config,
+            state_store=state_store,
+            ledger=ledger,
+            now=now,
+            ttl_minutes=order_intent_ttl_minutes,
+            job_id=job_id,
+        )
+        if active_result is not None:
+            return active_result
 
     if ledger_reader is None:
         if not hasattr(ledger, "root_dir"):
@@ -308,6 +412,11 @@ def run_vol_scan(
     )
 
     with state_store.get_strategy_lock(config.strategy_id):
+        # This final re-check is only a duplicate-intent guard. If an active
+        # intent appears here, skip with SKIP_ACTIVE_ORDER_INTENT; TTL expiry is
+        # handled by the initial active-intent gate on the next scheduler pass.
+        # Do not expire a newly discovered final-recheck intent and continue in
+        # the same scan.
         if state_store.get_active_order_intent(config.strategy_id) is not None:
             _append_active_order_intent_skip(config=config, ledger=ledger)
             return VolScanJobResult(
@@ -394,6 +503,7 @@ def run_s01_vol_scan(
     signal_context_provider: SignalContextProvider | None = None,
     engine: VolSellingEngine | None = None,
     ledger_reader: LedgerReader | None = None,
+    order_intent_ttl_minutes: int = ORDER_INTENT_TTL_MINUTES,
 ) -> VolScanJobResult:
     return run_vol_scan(
         config=S01_CONFIG,
@@ -406,6 +516,7 @@ def run_s01_vol_scan(
         signal_context_provider=signal_context_provider,
         ledger_reader=ledger_reader,
         engine=engine,
+        order_intent_ttl_minutes=order_intent_ttl_minutes,
     )
 
 
@@ -420,6 +531,7 @@ def run_s02_vol_scan(
     signal_context_provider: SignalContextProvider | None = None,
     engine: VolSellingEngine | None = None,
     ledger_reader: LedgerReader | None = None,
+    order_intent_ttl_minutes: int = ORDER_INTENT_TTL_MINUTES,
 ) -> VolScanJobResult:
     return run_vol_scan(
         config=S02_CONFIG,
@@ -432,4 +544,5 @@ def run_s02_vol_scan(
         signal_context_provider=signal_context_provider,
         ledger_reader=ledger_reader,
         engine=engine,
+        order_intent_ttl_minutes=order_intent_ttl_minutes,
     )

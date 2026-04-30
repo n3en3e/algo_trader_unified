@@ -35,6 +35,10 @@ class StateStoreCorruptError(RuntimeError):
     """Raised when StateStore cannot be trusted."""
 
 
+class OrderIntentTransitionError(ValueError):
+    """Raised when an order intent lifecycle transition is invalid."""
+
+
 def _fresh_state() -> dict[str, Any]:
     return {
         "schema_version": CURRENT_SCHEMA_VERSION,
@@ -180,6 +184,77 @@ class StateStore:
             intents[intent_id] = deepcopy(intent_record)
             self.save()
             return deepcopy(intents[intent_id])
+
+    def _transition_created_order_intent(
+        self,
+        intent_id: str,
+        *,
+        new_status: str,
+        updated_at: str,
+        fields: dict[str, Any],
+    ) -> dict[str, Any]:
+        intents = self.state.setdefault("order_intents", {})
+        intent = intents.get(intent_id)
+        if intent is None:
+            raise KeyError(f"order intent {intent_id!r} does not exist")
+        if not isinstance(intent, dict):
+            raise OrderIntentTransitionError(f"order intent {intent_id!r} is malformed")
+        strategy_id = intent.get("strategy_id")
+        if not isinstance(strategy_id, str) or not strategy_id:
+            raise OrderIntentTransitionError(f"order intent {intent_id!r} has no strategy_id")
+        with self.get_strategy_lock(strategy_id):
+            current = intents.get(intent_id)
+            if current is None:
+                raise KeyError(f"order intent {intent_id!r} does not exist")
+            if current.get("status") != "created":
+                raise OrderIntentTransitionError(
+                    f"order intent {intent_id!r} status is {current.get('status')!r}, not 'created'"
+                )
+            updated = deepcopy(current)
+            updated.update(deepcopy(fields))
+            updated["status"] = new_status
+            updated["updated_at"] = updated_at
+            intents[intent_id] = updated
+            self.save()
+            return deepcopy(updated)
+
+    def expire_order_intent(
+        self,
+        intent_id: str,
+        *,
+        expired_at: str,
+        expire_reason: str,
+        expired_event_id: str,
+    ) -> dict[str, Any]:
+        return self._transition_created_order_intent(
+            intent_id,
+            new_status="expired",
+            updated_at=expired_at,
+            fields={
+                "expired_at": expired_at,
+                "expire_reason": expire_reason,
+                "expired_event_id": expired_event_id,
+            },
+        )
+
+    def cancel_order_intent(
+        self,
+        intent_id: str,
+        *,
+        cancelled_at: str,
+        cancel_reason: str,
+        cancelled_event_id: str,
+    ) -> dict[str, Any]:
+        return self._transition_created_order_intent(
+            intent_id,
+            new_status="cancelled",
+            updated_at=cancelled_at,
+            fields={
+                "cancelled_at": cancelled_at,
+                "cancel_reason": cancel_reason,
+                "cancelled_event_id": cancelled_event_id,
+            },
+        )
 
     def get_order_intent(self, intent_id: str) -> dict[str, Any] | None:
         intent = self.state.setdefault("order_intents", {}).get(intent_id)

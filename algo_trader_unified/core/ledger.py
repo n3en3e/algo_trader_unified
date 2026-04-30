@@ -20,6 +20,8 @@ from algo_trader_unified.core.ledger_paths import (
 
 ORDER_LEDGER_EVENTS = {
     "ORDER_INTENT_CREATED",
+    "ORDER_INTENT_EXPIRED",
+    "ORDER_INTENT_CANCELLED",
     "ORDER_SUBMITTED",
     "ORDER_CONFIRMED",
     "ORDER_CANCEL_REQUESTED",

@@ -41,6 +41,10 @@ class LifecycleTransitionError(RuntimeError):
     """Raised when a position lifecycle transition is invalid."""
 
 
+# frozen=True was tested for Phase 3F and is not compatible with the existing
+# order-manager tests: mock.patch.object(engine, "record_close") and
+# mock.patch.object(engine, "mark_position_pending_close") raise
+# dataclasses.FrozenInstanceError when the engine instance is frozen.
 @dataclass
 class VolSellingEngine(BaseStrategy):
     config: StrategyVariantConfig
