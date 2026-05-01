@@ -21,6 +21,7 @@ ORDER_INTENT_STATUSES = [
     "cancelled",
 ]
 POSITION_STATUSES = ["open"]
+CLOSE_INTENT_STATUSES = ["created"]
 
 
 def _dict_records(value: Any) -> list[dict[str, Any]]:
@@ -31,15 +32,18 @@ def _dict_records(value: Any) -> list[dict[str, Any]]:
     return []
 
 
-def _load_records(root_dir: str) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+def _load_records(
+    root_dir: str,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
     portfolio_state_path = state_path(root_dir)
     if not portfolio_state_path.exists():
-        return [], []
+        return [], [], []
     state_store = StateStore(portfolio_state_path)
     state = state_store.state
     return (
         _dict_records(state.get("order_intents", {})),
         _dict_records(state.get("positions", {})),
+        _dict_records(state.get("close_intents", {})),
     )
 
 
@@ -59,17 +63,23 @@ def _counts_by_status(
 def build_summary(
     order_intents: list[dict[str, Any]],
     positions: list[dict[str, Any]],
+    close_intents: list[dict[str, Any]] | None = None,
     *,
     strategy_id: str | None = None,
 ) -> dict[str, Any]:
+    close_intents = close_intents or []
     if strategy_id is not None:
         order_intents = [
             record for record in order_intents if record.get("strategy_id") == strategy_id
         ]
         positions = [record for record in positions if record.get("strategy_id") == strategy_id]
+        close_intents = [
+            record for record in close_intents if record.get("strategy_id") == strategy_id
+        ]
 
     order_counts = _counts_by_status(order_intents, ORDER_INTENT_STATUSES)
     position_counts = _counts_by_status(positions, POSITION_STATUSES)
+    close_counts = _counts_by_status(close_intents, CLOSE_INTENT_STATUSES)
 
     created = order_counts["created"]
     submitted = order_counts["submitted"]
@@ -81,7 +91,9 @@ def build_summary(
     return {
         "order_intent_counts_by_status": order_counts,
         "position_counts_by_status": position_counts,
+        "close_intent_counts_by_status": close_counts,
         "open_positions_count": position_counts["open"],
+        "created_close_intents_count": close_counts["created"],
         "created_order_intents_count": created,
         "submitted_order_intents_count": submitted,
         "confirmed_order_intents_count": confirmed,
@@ -94,6 +106,7 @@ def build_summary(
         "stranded_confirmed_intents_count": confirmed,
         "total_order_intents_count": len(order_intents),
         "total_positions_count": len(positions),
+        "total_close_intents_count": len(close_intents),
         "filters": {
             "strategy_id": strategy_id,
         },
@@ -112,6 +125,9 @@ def format_human(summary: dict[str, Any]) -> str:
             f"  filled: {summary['filled_order_intents_count']}",
             f"  position_opened: {summary['position_opened_intents_count']}",
             f"  unresolved: {summary['unresolved_order_intents_count']}",
+            "Close intents:",
+            f"  total: {summary['total_close_intents_count']}",
+            f"  created: {summary['created_close_intents_count']}",
             "Positions:",
             f"  total: {summary['total_positions_count']}",
             f"  open: {summary['open_positions_count']}",
@@ -132,10 +148,11 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     try:
-        order_intents, positions = _load_records(args.root_dir)
+        order_intents, positions, close_intents = _load_records(args.root_dir)
         summary = build_summary(
             order_intents,
             positions,
+            close_intents,
             strategy_id=args.strategy_id,
         )
     except Exception as exc:

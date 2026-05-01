@@ -19,7 +19,9 @@ from algo_trader_unified.tools import system_status
 REQUIRED_SUMMARY_KEYS = {
     "order_intent_counts_by_status",
     "position_counts_by_status",
+    "close_intent_counts_by_status",
     "open_positions_count",
+    "created_close_intents_count",
     "created_order_intents_count",
     "submitted_order_intents_count",
     "confirmed_order_intents_count",
@@ -32,6 +34,7 @@ REQUIRED_SUMMARY_KEYS = {
     "stranded_confirmed_intents_count",
     "total_order_intents_count",
     "total_positions_count",
+    "total_close_intents_count",
     "filters",
 }
 EXPECTED_ORDER_INTENT_STATUS_KEYS = {
@@ -201,6 +204,9 @@ class SystemStatusEmptyTests(SystemStatusCase):
                     "  filled: 0",
                     "  position_opened: 0",
                     "  unresolved: 0",
+                    "Close intents:",
+                    "  total: 0",
+                    "  created: 0",
                     "Positions:",
                     "  total: 0",
                     "  open: 0",
@@ -307,6 +313,7 @@ class SystemStatusSummaryTests(SystemStatusCase):
             "System status",
             "Order intents:",
             "Positions:",
+            "Close intents:",
             "Stranded:",
             "total",
             "created",

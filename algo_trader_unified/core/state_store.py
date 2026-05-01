@@ -99,6 +99,7 @@ def _fresh_state() -> dict[str, Any]:
         "opportunities": [],
         "orders": [],
         "order_intents": {},
+        "close_intents": {},
         "fills": [],
         "strategy_snapshots": [],
         "account_snapshots": [],
@@ -152,6 +153,7 @@ class StateStore:
             )
         self._normalize_readiness(payload)
         payload.setdefault("order_intents", {})
+        payload.setdefault("close_intents", {})
         payload["positions"] = _normalize_positions_collection(payload.get("positions", {}))
         return payload
 
@@ -536,6 +538,163 @@ class StateStore:
                 continue
             records.append(deepcopy(position))
         return records
+
+    def create_close_intent(self, close_intent_record: dict[str, Any]) -> dict[str, Any]:
+        strategy_id = close_intent_record.get("strategy_id")
+        close_intent_id = close_intent_record.get("close_intent_id")
+        position_id = close_intent_record.get("position_id")
+        if not isinstance(strategy_id, str) or not strategy_id:
+            raise ValueError("close intent strategy_id is required")
+        if not isinstance(close_intent_id, str) or not close_intent_id:
+            raise ValueError("close intent close_intent_id is required")
+        if not isinstance(position_id, str) or not position_id:
+            raise ValueError("close intent position_id is required")
+        if close_intent_record.get("status") != "created":
+            raise ValueError("close intent status must be 'created'")
+        if close_intent_record.get("action") != "close":
+            raise ValueError("close intent action must be 'close'")
+        if close_intent_record.get("dry_run") is not True:
+            raise ValueError("close intent dry_run must be True")
+
+        required_string_fields = (
+            "sleeve_id",
+            "symbol",
+            "execution_mode",
+            "created_at",
+            "updated_at",
+            "close_reason",
+            "requested_by",
+            "position_opened_event_id",
+            "source_signal_event_id",
+            "fill_confirmed_event_id",
+            "close_intent_created_event_id",
+        )
+        for field in required_string_fields:
+            value = close_intent_record.get(field)
+            if not isinstance(value, str) or not value:
+                raise ValueError(f"close intent {field} is required")
+
+        quantity = validate_numeric_field(
+            "quantity",
+            close_intent_record.get("quantity"),
+            minimum=0,
+            allow_equal=False,
+            allow_int=True,
+        )
+        entry_price = validate_numeric_field(
+            "entry_price",
+            close_intent_record.get("entry_price"),
+            minimum=0,
+            allow_equal=True,
+            allow_int=True,
+        )
+
+        forbidden_fields = ("target_price", "limit_price", "order_type")
+        for field in forbidden_fields:
+            if field in close_intent_record:
+                raise ValueError(f"close intent must not include {field}")
+
+        with self.get_strategy_lock(strategy_id):
+            active = self.get_active_close_intent(position_id)
+            if active is not None:
+                raise ValueError(
+                    f"active close intent already exists for position_id={position_id!r}"
+                )
+            close_intents = self.state.setdefault("close_intents", {})
+            if close_intent_id in close_intents:
+                raise ValueError(f"close intent {close_intent_id!r} already exists")
+            record = deepcopy(close_intent_record)
+            record["quantity"] = quantity
+            record["entry_price"] = entry_price
+            close_intents[close_intent_id] = record
+            self.save()
+            return deepcopy(record)
+
+    def get_close_intent(self, close_intent_id: str) -> dict[str, Any] | None:
+        intent = self.state.setdefault("close_intents", {}).get(close_intent_id)
+        if intent is None:
+            return None
+        return deepcopy(intent)
+
+    def get_active_close_intent(self, position_id: str) -> dict[str, Any] | None:
+        for intent in self.state.setdefault("close_intents", {}).values():
+            if not isinstance(intent, dict):
+                continue
+            if intent.get("position_id") != position_id:
+                continue
+            if intent.get("status") == "created":
+                return deepcopy(intent)
+        return None
+
+    def list_close_intents(
+        self,
+        strategy_id: str | None = None,
+        status: str | None = None,
+        position_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        records = []
+        for intent in self.state.setdefault("close_intents", {}).values():
+            if not isinstance(intent, dict):
+                continue
+            if strategy_id is not None and intent.get("strategy_id") != strategy_id:
+                continue
+            if status is not None and intent.get("status") != status:
+                continue
+            if position_id is not None and intent.get("position_id") != position_id:
+                continue
+            records.append(deepcopy(intent))
+        return records
+
+    def mark_position_close_intent_created(
+        self,
+        position_id: str,
+        *,
+        close_intent_id: str,
+        close_intent_created_event_id: str,
+        close_intent_created_at: str,
+    ) -> dict[str, Any]:
+        positions = _normalize_positions_collection(self.state.get("positions", {}))
+        position = positions.get(position_id)
+        if position is None:
+            raise KeyError(f"position {position_id!r} does not exist")
+        if position.get("status") != "open":
+            raise ValueError(
+                f"position {position_id!r} status is {position.get('status')!r}, not 'open'"
+            )
+        existing = position.get("active_close_intent_id")
+        if existing:
+            active = self.get_close_intent(str(existing))
+            if active is not None and active.get("status") == "created":
+                raise ValueError(
+                    f"active close intent already exists for position_id={position_id!r}"
+                )
+        strategy_id = position.get("strategy_id")
+        if not isinstance(strategy_id, str) or not strategy_id:
+            raise ValueError(f"position {position_id!r} has no strategy_id")
+        with self.get_strategy_lock(strategy_id):
+            current = positions.get(position_id)
+            if current is None:
+                raise KeyError(f"position {position_id!r} does not exist")
+            if current.get("status") != "open":
+                raise ValueError(
+                    f"position {position_id!r} status is {current.get('status')!r}, not 'open'"
+                )
+            existing = current.get("active_close_intent_id")
+            if existing:
+                active = self.get_close_intent(str(existing))
+                if active is not None and active.get("status") == "created":
+                    raise ValueError(
+                        f"active close intent already exists for position_id={position_id!r}"
+                    )
+            updated = deepcopy(current)
+            updated["active_close_intent_id"] = close_intent_id
+            updated["close_intent_created_event_id"] = close_intent_created_event_id
+            updated["close_intent_created_at"] = close_intent_created_at
+            updated["updated_at"] = close_intent_created_at
+            positions[position_id] = updated
+            self.state["positions"] = positions
+            self.save()
+            return deepcopy(updated)
 
     def mark_intent_position_opened(
         self,
