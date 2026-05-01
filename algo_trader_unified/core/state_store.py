@@ -16,6 +16,7 @@ import json
 import os
 import threading
 from copy import deepcopy
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
@@ -37,6 +38,28 @@ class StateStoreCorruptError(RuntimeError):
 
 class OrderIntentTransitionError(ValueError):
     """Raised when an order intent lifecycle transition is invalid."""
+
+
+def _validate_numeric_field(
+    name: str,
+    value: Any,
+    *,
+    minimum: int | float,
+    allow_equal: bool,
+    allow_int: bool = True,
+) -> int | float:
+    allowed_types = (int, float, Decimal) if allow_int else (float, Decimal)
+    if isinstance(value, bool) or not isinstance(value, allowed_types):
+        raise OrderIntentTransitionError(f"{name} must be numeric, not {type(value).__name__}")
+    numeric = float(value) if isinstance(value, Decimal) else value
+    if allow_equal:
+        valid = numeric >= minimum
+    else:
+        valid = numeric > minimum
+    if not valid:
+        comparator = ">=" if allow_equal else ">"
+        raise OrderIntentTransitionError(f"{name} must be {comparator} {minimum}")
+    return numeric
 
 
 def _fresh_state() -> dict[str, Any]:
@@ -254,6 +277,39 @@ class StateStore:
             self.save()
             return deepcopy(updated)
 
+    def _transition_confirmed_order_intent(
+        self,
+        intent_id: str,
+        *,
+        new_status: str,
+        updated_at: str,
+        fields: dict[str, Any],
+    ) -> dict[str, Any]:
+        intents = self.state.setdefault("order_intents", {})
+        intent = intents.get(intent_id)
+        if intent is None:
+            raise KeyError(f"order intent {intent_id!r} does not exist")
+        if not isinstance(intent, dict):
+            raise OrderIntentTransitionError(f"order intent {intent_id!r} is malformed")
+        strategy_id = intent.get("strategy_id")
+        if not isinstance(strategy_id, str) or not strategy_id:
+            raise OrderIntentTransitionError(f"order intent {intent_id!r} has no strategy_id")
+        with self.get_strategy_lock(strategy_id):
+            current = intents.get(intent_id)
+            if current is None:
+                raise KeyError(f"order intent {intent_id!r} does not exist")
+            if current.get("status") != "confirmed":
+                raise OrderIntentTransitionError(
+                    f"order intent {intent_id!r} status is {current.get('status')!r}, not 'confirmed'"
+                )
+            updated = deepcopy(current)
+            updated.update(deepcopy(fields))
+            updated["status"] = new_status
+            updated["updated_at"] = updated_at
+            intents[intent_id] = updated
+            self.save()
+            return deepcopy(updated)
+
     def expire_order_intent(
         self,
         intent_id: str,
@@ -330,6 +386,49 @@ class StateStore:
                 "confirmed_at": confirmed_at,
                 "order_confirmed_event_id": order_confirmed_event_id,
                 "simulated_order_id": simulated_order_id,
+                "dry_run": dry_run,
+            },
+        )
+
+    def fill_order_intent(
+        self,
+        intent_id: str,
+        *,
+        filled_at: str,
+        fill_confirmed_event_id: str,
+        simulated_order_id: str,
+        fill_id: str,
+        fill_price: float | Decimal,
+        fill_quantity: int | float | Decimal,
+        dry_run: bool = True,
+    ) -> dict[str, Any]:
+        if not isinstance(fill_id, str) or not fill_id:
+            raise OrderIntentTransitionError("fill_id must be a non-empty string")
+        validated_price = _validate_numeric_field(
+            "fill_price",
+            fill_price,
+            minimum=0,
+            allow_equal=True,
+            allow_int=False,
+        )
+        validated_quantity = _validate_numeric_field(
+            "fill_quantity",
+            fill_quantity,
+            minimum=0,
+            allow_equal=False,
+            allow_int=True,  # Allow int for quantity
+        )
+        return self._transition_confirmed_order_intent(
+            intent_id,
+            new_status="filled",
+            updated_at=filled_at,
+            fields={
+                "filled_at": filled_at,
+                "fill_confirmed_event_id": fill_confirmed_event_id,
+                "simulated_order_id": simulated_order_id,
+                "fill_id": fill_id,
+                "fill_price": float(validated_price),
+                "fill_quantity": float(validated_quantity),
                 "dry_run": dry_run,
             },
         )

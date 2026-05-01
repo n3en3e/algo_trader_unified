@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from decimal import Decimal
 from hashlib import sha256
 from typing import Any, TypedDict
 
@@ -23,6 +24,22 @@ class DryRunOrderStatus(TypedDict):
     simulated_order_id: str
     checked_at: str
     confirmed_at: str
+    intent_id: str
+    strategy_id: str
+    symbol: str | None
+    order_ref: str | None
+    status: str
+    action: str
+
+
+class DryRunFillStatus(TypedDict):
+    dry_run: bool
+    simulated_order_id: str
+    checked_at: str
+    filled_at: str
+    fill_id: str
+    fill_price: float | Decimal
+    fill_quantity: int | float | Decimal
     intent_id: str
     strategy_id: str
     symbol: str | None
@@ -75,5 +92,31 @@ class DryRunExecutionAdapter:
             "symbol": intent.get("symbol"),
             "order_ref": intent.get("order_ref"),
             "status": "confirmed",
+            "action": "open",
+        }
+
+    def check_for_fills(
+        self,
+        *,
+        simulated_order_id: str,
+        intent: dict[str, Any],
+        checked_at: str,
+    ) -> DryRunFillStatus:
+        digest = sha256(
+            f"{simulated_order_id}|{intent['intent_id']}|{checked_at}".encode("utf-8")
+        ).hexdigest()[:16]
+        return {
+            "dry_run": True,
+            "simulated_order_id": simulated_order_id,
+            "checked_at": checked_at,
+            "filled_at": checked_at,
+            "fill_id": f"fill_{digest}",
+            "fill_price": 0.0,
+            "fill_quantity": 1,
+            "intent_id": intent["intent_id"],
+            "strategy_id": intent["strategy_id"],
+            "symbol": intent.get("symbol"),
+            "order_ref": intent.get("order_ref"),
+            "status": "filled",
             "action": "open",
         }

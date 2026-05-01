@@ -6,6 +6,8 @@ from datetime import datetime
 from typing import Any
 from zoneinfo import ZoneInfo
 
+from algo_trader_unified.core.validation import validate_numeric_field
+
 
 NEW_YORK = ZoneInfo("America/New_York")
 
@@ -63,6 +65,17 @@ def _require_submitted_intent(state_store, intent_id: str) -> dict[str, Any]:
     if intent.get("status") != "submitted":
         raise ValueError(
             f"order intent {intent_id!r} status is {intent.get('status')!r}, not 'submitted'"
+        )
+    return intent
+
+
+def _require_confirmed_intent(state_store, intent_id: str) -> dict[str, Any]:
+    intent = state_store.get_order_intent(intent_id)
+    if intent is None:
+        raise KeyError(f"order intent {intent_id!r} does not exist")
+    if intent.get("status") != "confirmed":
+        raise ValueError(
+            f"order intent {intent_id!r} status is {intent.get('status')!r}, not 'confirmed'"
         )
     return intent
 
@@ -268,5 +281,103 @@ def confirm_order_intent(
         confirmed_at=status["confirmed_at"],
         order_confirmed_event_id=event_id,
         simulated_order_id=simulated_order_id,
+        dry_run=True,
+    )
+
+
+def confirm_fill(
+    *,
+    state_store,
+    ledger,
+    execution_adapter,
+    intent_id: str,
+    filled_at: str,
+) -> dict[str, Any]:
+    intent = _require_confirmed_intent(state_store, intent_id)
+    if "dry_run" not in intent:
+        raise ValueError(
+            f"order intent {intent_id!r} is missing intent.dry_run; Phase 3J requires dry_run=True"
+        )
+    if intent["dry_run"] is not True:
+        raise ValueError(
+            f"order intent {intent_id!r} has dry_run={intent['dry_run']!r}; Phase 3J requires dry_run=True"
+        )
+    simulated_order_id = intent.get("simulated_order_id")
+    if not isinstance(simulated_order_id, str) or not simulated_order_id:
+        raise ValueError(
+            f"order intent {intent_id!r} is missing simulated_order_id; Phase 3J requires simulated_order_id"
+        )
+    order_confirmed_event_id = intent.get("order_confirmed_event_id")
+    if not isinstance(order_confirmed_event_id, str) or not order_confirmed_event_id:
+        raise ValueError(
+            f"order intent {intent_id!r} is missing order_confirmed_event_id; Phase 3J requires order_confirmed_event_id"
+        )
+
+    fill = execution_adapter.check_for_fills(
+        simulated_order_id=simulated_order_id,
+        intent=intent,
+        checked_at=filled_at,
+    )
+    if fill.get("status") != "filled":
+        raise ValueError(
+            f"order intent {intent_id!r} dry-run fill status is {fill.get('status')!r}, not 'filled'"
+        )
+    fill_id = fill.get("fill_id")
+    if not isinstance(fill_id, str) or not fill_id:
+        raise ValueError("fill_id must be a non-empty string")
+    fill_price = validate_numeric_field(
+        "fill_price",
+        fill.get("fill_price"),
+        minimum=0,
+        allow_equal=True,
+        allow_int=False,
+    )
+    fill_quantity = validate_numeric_field(
+        "fill_quantity",
+        fill.get("fill_quantity"),
+        minimum=0,
+        allow_equal=False,
+        allow_int=True,
+    )
+
+    event_id = str(
+        ledger.append(
+            event_type="FILL_CONFIRMED",
+            strategy_id=intent["strategy_id"],
+            execution_mode=intent["execution_mode"],
+            source_module="core.order_intents",
+            payload={
+                "intent_id": intent_id,
+                "strategy_id": intent["strategy_id"],
+                "sleeve_id": intent.get("sleeve_id"),
+                "symbol": intent.get("symbol"),
+                "execution_mode": intent["execution_mode"],
+                "order_ref": intent.get("order_ref"),
+                "source_signal_event_id": intent.get("source_signal_event_id"),
+                "order_intent_created_event_id": intent.get(
+                    "order_intent_created_event_id"
+                ),
+                "order_submitted_event_id": intent.get("order_submitted_event_id"),
+                "order_confirmed_event_id": order_confirmed_event_id,
+                "filled_at": fill["filled_at"],
+                "checked_at": fill["checked_at"],
+                "dry_run": True,
+                "simulated_order_id": simulated_order_id,
+                "fill_id": fill_id,
+                "fill_price": fill_price,
+                "fill_quantity": fill_quantity,
+                "action": "open",
+                "event_detail": "FILL_CONFIRMED",
+            },
+        )
+    )
+    return state_store.fill_order_intent(
+        intent_id,
+        filled_at=fill["filled_at"],
+        fill_confirmed_event_id=event_id,
+        simulated_order_id=simulated_order_id,
+        fill_id=fill_id,
+        fill_price=fill_price,
+        fill_quantity=fill_quantity,
         dry_run=True,
     )
