@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Any
 
 from algo_trader_unified.config.portfolio import STRATEGY_IDS, S02_VOL_ENHANCED
+from algo_trader_unified.core.validation import validate_numeric_field
 
 
 CURRENT_SCHEMA_VERSION = 1
@@ -40,32 +41,61 @@ class OrderIntentTransitionError(ValueError):
     """Raised when an order intent lifecycle transition is invalid."""
 
 
-def _validate_numeric_field(
-    name: str,
-    value: Any,
-    *,
-    minimum: int | float,
-    allow_equal: bool,
-    allow_int: bool = True,
-) -> int | float:
-    allowed_types = (int, float, Decimal) if allow_int else (float, Decimal)
-    if isinstance(value, bool) or not isinstance(value, allowed_types):
-        raise OrderIntentTransitionError(f"{name} must be numeric, not {type(value).__name__}")
-    numeric = float(value) if isinstance(value, Decimal) else value
-    if allow_equal:
-        valid = numeric >= minimum
-    else:
-        valid = numeric > minimum
-    if not valid:
-        comparator = ">=" if allow_equal else ">"
-        raise OrderIntentTransitionError(f"{name} must be {comparator} {minimum}")
-    return numeric
+class PositionBook(dict):
+    """Dict-backed position collection with legacy list-style test compatibility."""
+
+    def append(self, position: dict[str, Any]) -> None:
+        if not isinstance(position, dict):
+            raise TypeError("position must be a dict")
+        position_id = position.get("position_id") or f"legacy_position_{len(self)}"
+        self[str(position_id)] = position
+
+    def __iter__(self):
+        # Intentionally iterate over position records for backwards
+        # compatibility with legacy list-like position collections. Use
+        # .keys() or .items() when position IDs are required.
+        return iter(self.values())
+
+    def __getitem__(self, key):
+        if isinstance(key, int):
+            return list(self.values())[key]
+        return super().__getitem__(key)
+
+    def __setitem__(self, key, value):
+        if isinstance(key, int):
+            actual_key = list(self.keys())[key]
+            return super().__setitem__(actual_key, value)
+        return super().__setitem__(key, value)
+
+
+def _normalize_positions_collection(value: Any) -> PositionBook:
+    positions = PositionBook()
+    if isinstance(value, dict):
+        for position_id, position in value.items():
+            if isinstance(position, dict):
+                positions[str(position_id)] = position
+        return positions
+    if isinstance(value, list):
+        for index, position in enumerate(value):
+            if not isinstance(position, dict):
+                continue
+            position_id = position.get("position_id") or f"legacy_position_{index}"
+            positions[str(position_id)] = position
+    return positions
+
+
+def _position_values(value: Any) -> list[dict[str, Any]]:
+    if isinstance(value, dict):
+        return [position for position in value.values() if isinstance(position, dict)]
+    if isinstance(value, list):
+        return [position for position in value if isinstance(position, dict)]
+    return []
 
 
 def _fresh_state() -> dict[str, Any]:
     return {
         "schema_version": CURRENT_SCHEMA_VERSION,
-        "positions": [],
+        "positions": PositionBook(),
         "opportunities": [],
         "orders": [],
         "order_intents": {},
@@ -122,6 +152,7 @@ class StateStore:
             )
         self._normalize_readiness(payload)
         payload.setdefault("order_intents", {})
+        payload["positions"] = _normalize_positions_collection(payload.get("positions", {}))
         return payload
 
     @staticmethod
@@ -158,7 +189,7 @@ class StateStore:
     def summary(self) -> dict[str, Any]:
         return {
             "schema_version": self.state.get("schema_version"),
-            "positions": len(self.state.get("positions", [])),
+            "positions": len(_position_values(self.state.get("positions", {}))),
             "opportunities": len(self.state.get("opportunities", [])),
             "orders": len(self.state.get("orders", [])),
             "fills": len(self.state.get("fills", [])),
@@ -404,19 +435,19 @@ class StateStore:
     ) -> dict[str, Any]:
         if not isinstance(fill_id, str) or not fill_id:
             raise OrderIntentTransitionError("fill_id must be a non-empty string")
-        validated_price = _validate_numeric_field(
+        validated_price = validate_numeric_field(
             "fill_price",
             fill_price,
             minimum=0,
             allow_equal=True,
             allow_int=False,
         )
-        validated_quantity = _validate_numeric_field(
+        validated_quantity = validate_numeric_field(
             "fill_quantity",
             fill_quantity,
             minimum=0,
             allow_equal=False,
-            allow_int=True,  # Allow int for quantity
+            allow_int=True,
         )
         return self._transition_confirmed_order_intent(
             intent_id,
@@ -427,11 +458,123 @@ class StateStore:
                 "fill_confirmed_event_id": fill_confirmed_event_id,
                 "simulated_order_id": simulated_order_id,
                 "fill_id": fill_id,
-                "fill_price": float(validated_price),
-                "fill_quantity": float(validated_quantity),
+                "fill_price": validated_price,
+                "fill_quantity": validated_quantity,
                 "dry_run": dry_run,
             },
         )
+
+    def create_open_position(self, position_record: dict[str, Any]) -> dict[str, Any]:
+        strategy_id = position_record.get("strategy_id")
+        position_id = position_record.get("position_id")
+        if not isinstance(strategy_id, str) or not strategy_id:
+            raise ValueError("position strategy_id is required")
+        if not isinstance(position_id, str) or not position_id:
+            raise ValueError("position position_id is required")
+        if position_record.get("status") != "open":
+            raise ValueError("position status must be 'open'")
+        entry_price = validate_numeric_field(
+            "entry_price",
+            position_record.get("entry_price"),
+            minimum=0,
+            allow_equal=True,
+            allow_int=False,
+        )
+        quantity = validate_numeric_field(
+            "quantity",
+            position_record.get("quantity"),
+            minimum=0,
+            allow_equal=False,
+            allow_int=True,
+        )
+        with self.get_strategy_lock(strategy_id):
+            positions = _normalize_positions_collection(self.state.get("positions", {}))
+            for position in positions.values():
+                if (
+                    isinstance(position, dict)
+                    and position.get("strategy_id") == strategy_id
+                    and position.get("status") == "open"
+                ):
+                    raise ValueError(f"open position already exists for strategy_id={strategy_id!r}")
+            record = deepcopy(position_record)
+            record["entry_price"] = entry_price
+            record["quantity"] = quantity
+            positions[position_id] = record
+            self.state["positions"] = positions
+            self.save()
+            return deepcopy(record)
+
+    def get_position(self, position_id: str) -> dict[str, Any] | None:
+        positions = _normalize_positions_collection(self.state.get("positions", {}))
+        position = positions.get(position_id)
+        if position is None:
+            return None
+        return deepcopy(position)
+
+    def get_open_position(self, strategy_id: str, symbol: str | None = None) -> dict[str, Any] | None:
+        with self.get_strategy_lock(strategy_id):
+            for position in _position_values(self.state.get("positions", {})):
+                if position.get("strategy_id") != strategy_id:
+                    continue
+                if position.get("status") != "open":
+                    continue
+                if symbol is not None and position.get("symbol") != symbol:
+                    continue
+                return deepcopy(position)
+        return None
+
+    def list_positions(
+        self,
+        strategy_id: str | None = None,
+        status: str | None = None,
+    ) -> list[dict[str, Any]]:
+        records = []
+        for position in _position_values(self.state.get("positions", {})):
+            if strategy_id is not None and position.get("strategy_id") != strategy_id:
+                continue
+            if status is not None and position.get("status") != status:
+                continue
+            records.append(deepcopy(position))
+        return records
+
+    def mark_intent_position_opened(
+        self,
+        intent_id: str,
+        *,
+        position_id: str,
+        position_opened_event_id: str,
+        opened_at: str,
+    ) -> dict[str, Any]:
+        intents = self.state.setdefault("order_intents", {})
+        intent = intents.get(intent_id)
+        if intent is None:
+            raise KeyError(f"order intent {intent_id!r} does not exist")
+        if not isinstance(intent, dict):
+            raise OrderIntentTransitionError(f"order intent {intent_id!r} is malformed")
+        strategy_id = intent.get("strategy_id")
+        if not isinstance(strategy_id, str) or not strategy_id:
+            raise OrderIntentTransitionError(f"order intent {intent_id!r} has no strategy_id")
+        with self.get_strategy_lock(strategy_id):
+            current = intents.get(intent_id)
+            if current is None:
+                raise KeyError(f"order intent {intent_id!r} does not exist")
+            if current.get("status") != "filled":
+                raise OrderIntentTransitionError(
+                    f"order intent {intent_id!r} status is {current.get('status')!r}, not 'filled'"
+                )
+            updated = deepcopy(current)
+            updated.update(
+                {
+                    "status": "position_opened",
+                    "position_id": position_id,
+                    "position_opened_event_id": position_opened_event_id,
+                    "position_opened_at": opened_at,
+                    "updated_at": opened_at,
+                }
+            )
+            intents[intent_id] = updated
+            self.save()
+            return deepcopy(updated)
 
     def get_order_intent(self, intent_id: str) -> dict[str, Any] | None:
         intent = self.state.setdefault("order_intents", {}).get(intent_id)
@@ -466,9 +609,7 @@ class StateStore:
 
     def bot_attributed_exposure(self) -> dict[str, float]:
         exposure: dict[str, float] = {}
-        for position in self.state.get("positions", []):
-            if not isinstance(position, dict):
-                continue
+        for position in _position_values(self.state.get("positions", {})):
             status = position.get("status")
             if status not in {"pending_open", "open", "pending_close", "partial_fill_error", "NEEDS_RECONCILIATION"}:
                 continue

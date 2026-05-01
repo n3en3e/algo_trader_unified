@@ -623,18 +623,6 @@ class ConfirmFillCliTests(Phase3JCase):
                     "not-a-time",
                 ]
             )
-        code, stdout, stderr = self.run_fill_cli(
-            [
-                "--root-dir",
-                str(self.root),
-                "--intent-id",
-                intent_id,
-                "--filled-at",
-                "not-a-time",
-            ]
-        )
-        self.assertNotEqual(code, 0)
-        self.assertIn("Error", stderr)
         self.assertEqual(self.load_state_store().get_order_intent(intent_id), before)
         self.assertEqual(self.order_path.read_text(encoding="utf-8"), "")
 
