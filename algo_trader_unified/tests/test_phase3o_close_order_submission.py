@@ -522,10 +522,11 @@ class SystemStatusSubmittedCloseIntentTests(Phase3OCase):
         )
         self.assertEqual(
             summary["close_intent_counts_by_status"],
-            {"created": 1, "submitted": 1},
+            {"created": 1, "submitted": 1, "confirmed": 0},
         )
         self.assertEqual(summary["created_close_intents_count"], 1)
         self.assertEqual(summary["submitted_close_intents_count"], 1)
+        self.assertEqual(summary["confirmed_close_intents_count"], 0)
         self.assertEqual(summary["total_close_intents_count"], 2)
         filtered = system_status.build_summary(
             [],
@@ -535,7 +536,7 @@ class SystemStatusSubmittedCloseIntentTests(Phase3OCase):
         )
         self.assertEqual(
             filtered["close_intent_counts_by_status"],
-            {"created": 0, "submitted": 1},
+            {"created": 0, "submitted": 1, "confirmed": 0},
         )
         self.assertEqual(s02["status"], "created")
 
@@ -561,7 +562,6 @@ class CloseSubmissionSafetyTests(unittest.TestCase):
             "except:",
             "POSITION_ADJUSTED",
             "POSITION_CLOSED",
-            "CLOSE_ORDER_CONFIRMED",
             "CLOSE_FILL_CONFIRMED",
             "target_price",
             "limit_price",

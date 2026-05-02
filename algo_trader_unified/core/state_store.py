@@ -45,7 +45,7 @@ class CloseIntentTransitionError(ValueError):
     """Raised when a close intent lifecycle transition is invalid."""
 
 
-ACTIVE_CLOSE_INTENT_STATUSES = {"created", "submitted"}
+ACTIVE_CLOSE_INTENT_STATUSES = {"created", "submitted", "confirmed"}
 
 
 class PositionBook(dict):
@@ -673,6 +673,64 @@ class StateStore:
                     "close_order_submitted_event_id": close_order_submitted_event_id,
                     "simulated_close_order_id": simulated_close_order_id,
                     "close_order_ref": close_order_ref,
+                    "dry_run": dry_run,
+                }
+            )
+            close_intents[close_intent_id] = updated
+            self.save()
+            return deepcopy(updated)
+
+    def confirm_close_order(
+        self,
+        close_intent_id: str,
+        *,
+        confirmed_at: str,
+        close_order_confirmed_event_id: str,
+        simulated_close_order_id: str,
+        dry_run: bool = True,
+    ) -> dict[str, Any]:
+        close_intents = self.state.setdefault("close_intents", {})
+        intent = close_intents.get(close_intent_id)
+        if intent is None:
+            raise KeyError(f"close intent {close_intent_id!r} does not exist")
+        if not isinstance(intent, dict):
+            raise CloseIntentTransitionError(
+                f"close intent {close_intent_id!r} is malformed"
+            )
+        strategy_id = intent.get("strategy_id")
+        if not isinstance(strategy_id, str) or not strategy_id:
+            raise CloseIntentTransitionError(
+                f"close intent {close_intent_id!r} has no strategy_id"
+            )
+        with self.get_strategy_lock(strategy_id):
+            current = close_intents.get(close_intent_id)
+            if current is None:
+                raise KeyError(f"close intent {close_intent_id!r} does not exist")
+            if current.get("status") != "submitted":
+                raise CloseIntentTransitionError(
+                    f"close intent {close_intent_id!r} status is {current.get('status')!r}, not 'submitted'"
+                )
+            if not current.get("close_order_submitted_event_id"):
+                raise CloseIntentTransitionError(
+                    f"close intent {close_intent_id!r} is missing close_order_submitted_event_id"
+                )
+            existing_simulated_id = current.get("simulated_close_order_id")
+            if not existing_simulated_id:
+                raise CloseIntentTransitionError(
+                    f"close intent {close_intent_id!r} is missing simulated_close_order_id"
+                )
+            if existing_simulated_id != simulated_close_order_id:
+                raise CloseIntentTransitionError(
+                    f"close intent {close_intent_id!r} simulated_close_order_id is {existing_simulated_id!r}, not {simulated_close_order_id!r}"
+                )
+            updated = deepcopy(current)
+            updated.update(
+                {
+                    "status": "confirmed",
+                    "confirmed_at": confirmed_at,
+                    "updated_at": confirmed_at,
+                    "close_order_confirmed_event_id": close_order_confirmed_event_id,
+                    "simulated_close_order_id": simulated_close_order_id,
                     "dry_run": dry_run,
                 }
             )

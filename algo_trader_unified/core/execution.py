@@ -32,6 +32,20 @@ class DryRunCloseOrderSubmission(TypedDict):
     action: str
 
 
+class DryRunCloseOrderStatus(TypedDict):
+    dry_run: bool
+    close_intent_id: str
+    position_id: str
+    strategy_id: str
+    symbol: str | None
+    close_order_ref: str
+    simulated_close_order_id: str
+    checked_at: str
+    confirmed_at: str
+    status: str
+    action: str
+
+
 class DryRunOrderStatus(TypedDict):
     dry_run: bool
     simulated_order_id: str
@@ -134,6 +148,27 @@ class DryRunExecutionAdapter:
             "order_ref": intent.get("order_ref"),
             "status": "confirmed",
             "action": "open",
+        }
+
+    def check_close_order_status(
+        self,
+        *,
+        close_intent: dict[str, Any],
+        simulated_close_order_id: str,
+        checked_at: str,
+    ) -> DryRunCloseOrderStatus:
+        return {
+            "dry_run": True,
+            "close_intent_id": close_intent["close_intent_id"],
+            "position_id": close_intent["position_id"],
+            "strategy_id": close_intent["strategy_id"],
+            "symbol": close_intent.get("symbol"),
+            "close_order_ref": close_intent["close_order_ref"],
+            "simulated_close_order_id": simulated_close_order_id,
+            "checked_at": checked_at,
+            "confirmed_at": checked_at,
+            "status": "confirmed",
+            "action": "close",
         }
 
     def check_for_fills(

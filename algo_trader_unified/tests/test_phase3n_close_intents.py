@@ -736,10 +736,11 @@ class SystemStatusCloseIntentTests(Phase3NCase):
         payload = json.loads(stdout)
         self.assertEqual(
             payload["close_intent_counts_by_status"],
-            {"created": 0, "submitted": 0},
+            {"created": 0, "submitted": 0, "confirmed": 0},
         )
         self.assertEqual(payload["created_close_intents_count"], 0)
         self.assertEqual(payload["submitted_close_intents_count"], 0)
+        self.assertEqual(payload["confirmed_close_intents_count"], 0)
         self.assertEqual(payload["total_close_intents_count"], 0)
 
         self.create_position(S01_VOL_BASELINE, "position:status:s01")
@@ -762,10 +763,11 @@ class SystemStatusCloseIntentTests(Phase3NCase):
         payload = json.loads(stdout)
         self.assertEqual(
             payload["close_intent_counts_by_status"],
-            {"created": 2, "submitted": 0},
+            {"created": 2, "submitted": 0, "confirmed": 0},
         )
         self.assertEqual(payload["created_close_intents_count"], 2)
         self.assertEqual(payload["submitted_close_intents_count"], 0)
+        self.assertEqual(payload["confirmed_close_intents_count"], 0)
         self.assertEqual(payload["total_close_intents_count"], 2)
 
         code, stdout, stderr = self.run_status(["--json", "--strategy-id", S01_VOL_BASELINE])
@@ -773,10 +775,11 @@ class SystemStatusCloseIntentTests(Phase3NCase):
         payload = json.loads(stdout)
         self.assertEqual(
             payload["close_intent_counts_by_status"],
-            {"created": 1, "submitted": 0},
+            {"created": 1, "submitted": 0, "confirmed": 0},
         )
         self.assertEqual(payload["created_close_intents_count"], 1)
         self.assertEqual(payload["submitted_close_intents_count"], 0)
+        self.assertEqual(payload["confirmed_close_intents_count"], 0)
         self.assertEqual(payload["total_close_intents_count"], 1)
 
     def test_status_remains_read_only(self) -> None:
