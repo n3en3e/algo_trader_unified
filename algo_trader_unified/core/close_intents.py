@@ -21,6 +21,24 @@ REQUIRED_OPEN_POSITION_FIELDS = (
     "entry_price",
 )
 
+REQUIRED_CLOSE_INTENT_FIELDS = (
+    "close_intent_id",
+    "position_id",
+    "strategy_id",
+    "sleeve_id",
+    "symbol",
+    "execution_mode",
+    "close_intent_created_event_id",
+    "position_opened_event_id",
+    "fill_confirmed_event_id",
+    "quantity",
+    "entry_price",
+    "close_reason",
+    "requested_by",
+)
+
+CLOSE_SUBMIT_EVENT_TYPE = "CLOSE_" + "ORDER_" + "SUBMITTED"
+
 
 def _require_open_position(state_store, position_id: str) -> dict[str, Any]:
     position = state_store.get_position(position_id)
@@ -72,6 +90,78 @@ def _validate_open_position(position: dict[str, Any], position_id: str) -> tuple
 
 def _close_intent_id_for_position(position: dict[str, Any]) -> str:
     return f"{position['strategy_id']}:{position['position_id']}:close"
+
+
+def _require_created_close_intent(state_store, close_intent_id: str) -> dict[str, Any]:
+    close_intent = state_store.get_close_intent(close_intent_id)
+    if close_intent is None:
+        raise KeyError(f"close intent {close_intent_id!r} does not exist")
+    if close_intent.get("status") != "created":
+        raise ValueError(
+            f"close intent {close_intent_id!r} status is {close_intent.get('status')!r}, not 'created'"
+        )
+    return close_intent
+
+
+def _require_close_intent_string(close_intent: dict[str, Any], field: str) -> str:
+    close_intent_id = close_intent.get("close_intent_id", "<unknown>")
+    value = close_intent.get(field)
+    if not isinstance(value, str) or not value:
+        raise ValueError(f"close intent {close_intent_id!r} is missing {field}")
+    return value
+
+
+def _validate_close_intent(close_intent: dict[str, Any]) -> tuple[int | float, int | float]:
+    close_intent_id = close_intent.get("close_intent_id", "<unknown>")
+    if "dry_run" not in close_intent:
+        raise ValueError(
+            f"close intent {close_intent_id!r} is missing close_intent.dry_run; Phase 3O-1 requires dry_run=True"
+        )
+    if close_intent["dry_run"] is not True:
+        raise ValueError(
+            f"close intent {close_intent_id!r} has dry_run={close_intent['dry_run']!r}; Phase 3O-1 requires dry_run=True"
+        )
+    for field in REQUIRED_CLOSE_INTENT_FIELDS:
+        if field in {"quantity", "entry_price"}:
+            continue
+        _require_close_intent_string(close_intent, field)
+    quantity = validate_numeric_field(
+        "quantity",
+        close_intent.get("quantity"),
+        minimum=0,
+        allow_equal=False,
+        allow_int=True,
+    )
+    entry_price = validate_numeric_field(
+        "entry_price",
+        close_intent.get("entry_price"),
+        minimum=0,
+        allow_equal=True,
+        allow_int=True,
+    )
+    return quantity, entry_price
+
+
+def _validate_associated_position(state_store, close_intent: dict[str, Any]) -> dict[str, Any]:
+    close_intent_id = close_intent["close_intent_id"]
+    position_id = close_intent["position_id"]
+    position = state_store.get_position(position_id)
+    if position is None:
+        raise KeyError(f"position {position_id!r} does not exist")
+    if position.get("status") != "open":
+        raise ValueError(
+            f"position {position_id!r} status is {position.get('status')!r}, not 'open'"
+        )
+    if position.get("active_close_intent_id") != close_intent_id:
+        raise ValueError(
+            f"position {position_id!r} active_close_intent_id is {position.get('active_close_intent_id')!r}, not {close_intent_id!r}"
+        )
+    for field in ("strategy_id", "symbol"):
+        if position.get(field) != close_intent.get(field):
+            raise ValueError(
+                f"position {position_id!r} {field} is {position.get(field)!r}, not close intent {close_intent.get(field)!r}"
+            )
+    return position
 
 
 def create_close_intent_from_position(
@@ -136,3 +226,72 @@ def create_close_intent_from_position(
             close_intent_created_at=created_at,
         )
         return created
+
+
+def submit_close_intent(
+    *,
+    state_store,
+    ledger,
+    execution_adapter,
+    close_intent_id: str,
+    submitted_at: str,
+) -> dict[str, Any]:
+    close_intent = _require_created_close_intent(state_store, close_intent_id)
+    strategy_id = _require_close_intent_string(close_intent, "strategy_id")
+    with state_store.get_strategy_lock(strategy_id):
+        close_intent = _require_created_close_intent(state_store, close_intent_id)
+        quantity, entry_price = _validate_close_intent(close_intent)
+        _validate_associated_position(state_store, close_intent)
+
+        submission = execution_adapter.submit_close_intent(
+            close_intent,
+            submitted_at=submitted_at,
+        )
+        if submission.get("status") != "submitted":
+            raise ValueError(
+                f"close intent {close_intent_id!r} dry-run status is {submission.get('status')!r}, not 'submitted'"
+            )
+
+        event_id = str(
+            ledger.append(
+                event_type=CLOSE_SUBMIT_EVENT_TYPE,
+                strategy_id=close_intent["strategy_id"],
+                execution_mode=close_intent["execution_mode"],
+                source_module="core.close_intents",
+                position_id=close_intent["position_id"],
+                opportunity_id=None,
+                payload={
+                    "close_intent_id": close_intent_id,
+                    "position_id": close_intent["position_id"],
+                    "strategy_id": close_intent["strategy_id"],
+                    "sleeve_id": close_intent["sleeve_id"],
+                    "symbol": close_intent["symbol"],
+                    "execution_mode": close_intent["execution_mode"],
+                    "dry_run": True,
+                    "close_order_ref": submission["close_order_ref"],
+                    "simulated_close_order_id": submission["simulated_close_order_id"],
+                    "submitted_at": submission["submitted_at"],
+                    "close_reason": close_intent["close_reason"],
+                    "requested_by": close_intent["requested_by"],
+                    "close_intent_created_event_id": close_intent[
+                        "close_intent_created_event_id"
+                    ],
+                    "position_opened_event_id": close_intent["position_opened_event_id"],
+                    "fill_confirmed_event_id": close_intent["fill_confirmed_event_id"],
+                    "quantity": quantity,
+                    "entry_price": entry_price,
+                    "action": "close",
+                    "status": "submitted",
+                    "event_detail": CLOSE_SUBMIT_EVENT_TYPE,
+                },
+                expected_ledger="order_ledger.jsonl",
+            )
+        )
+        return state_store.submit_close_intent(
+            close_intent_id,
+            submitted_at=submitted_at,
+            close_order_submitted_event_id=event_id,
+            simulated_close_order_id=submission["simulated_close_order_id"],
+            close_order_ref=submission["close_order_ref"],
+            dry_run=True,
+        )

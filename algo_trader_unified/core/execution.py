@@ -19,6 +19,19 @@ class DryRunOrderSubmission(TypedDict):
     status: str
 
 
+class DryRunCloseOrderSubmission(TypedDict):
+    dry_run: bool
+    close_intent_id: str
+    position_id: str
+    strategy_id: str
+    symbol: str | None
+    close_order_ref: str
+    simulated_close_order_id: str
+    submitted_at: str
+    status: str
+    action: str
+
+
 class DryRunOrderStatus(TypedDict):
     dry_run: bool
     simulated_order_id: str
@@ -73,6 +86,34 @@ class DryRunExecutionAdapter:
             "symbol": intent.get("symbol"),
             "action": "open",
             "status": "submitted",
+        }
+
+    def submit_close_intent(
+        self,
+        close_intent: dict[str, Any],
+        *,
+        submitted_at: str,
+    ) -> DryRunCloseOrderSubmission:
+        close_intent_id = close_intent["close_intent_id"]
+        position_id = close_intent["position_id"]
+        strategy_id = close_intent["strategy_id"]
+        close_order_ref = f"{strategy_id}:{position_id}:{close_intent_id}:close"
+        digest = sha256(
+            f"{close_intent_id}|{position_id}|{strategy_id}|{close_order_ref}|{submitted_at}".encode(
+                "utf-8"
+            )
+        ).hexdigest()[:16]
+        return {
+            "dry_run": True,
+            "close_intent_id": close_intent_id,
+            "position_id": position_id,
+            "strategy_id": strategy_id,
+            "symbol": close_intent.get("symbol"),
+            "close_order_ref": close_order_ref,
+            "simulated_close_order_id": f"sim_close_{digest}",
+            "submitted_at": submitted_at,
+            "status": "submitted",
+            "action": "close",
         }
 
     def check_order_status(

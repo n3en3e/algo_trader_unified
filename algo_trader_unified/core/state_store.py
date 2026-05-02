@@ -41,6 +41,13 @@ class OrderIntentTransitionError(ValueError):
     """Raised when an order intent lifecycle transition is invalid."""
 
 
+class CloseIntentTransitionError(ValueError):
+    """Raised when a close intent lifecycle transition is invalid."""
+
+
+ACTIVE_CLOSE_INTENT_STATUSES = {"created", "submitted"}
+
+
 class PositionBook(dict):
     """Dict-backed position collection with legacy list-style test compatibility."""
 
@@ -622,9 +629,56 @@ class StateStore:
                 continue
             if intent.get("position_id") != position_id:
                 continue
-            if intent.get("status") == "created":
+            if intent.get("status") in ACTIVE_CLOSE_INTENT_STATUSES:
                 return deepcopy(intent)
         return None
+
+    def submit_close_intent(
+        self,
+        close_intent_id: str,
+        *,
+        submitted_at: str,
+        close_order_submitted_event_id: str,
+        simulated_close_order_id: str,
+        close_order_ref: str,
+        dry_run: bool = True,
+    ) -> dict[str, Any]:
+        close_intents = self.state.setdefault("close_intents", {})
+        intent = close_intents.get(close_intent_id)
+        if intent is None:
+            raise KeyError(f"close intent {close_intent_id!r} does not exist")
+        if not isinstance(intent, dict):
+            raise CloseIntentTransitionError(
+                f"close intent {close_intent_id!r} is malformed"
+            )
+        strategy_id = intent.get("strategy_id")
+        if not isinstance(strategy_id, str) or not strategy_id:
+            raise CloseIntentTransitionError(
+                f"close intent {close_intent_id!r} has no strategy_id"
+            )
+        with self.get_strategy_lock(strategy_id):
+            current = close_intents.get(close_intent_id)
+            if current is None:
+                raise KeyError(f"close intent {close_intent_id!r} does not exist")
+            if current.get("status") != "created":
+                raise CloseIntentTransitionError(
+                    f"close intent {close_intent_id!r} status is {current.get('status')!r}, not 'created'"
+                )
+            updated = deepcopy(current)
+            updated.update(
+                {
+                    "status": "submitted",
+                    "submitted_at": submitted_at,
+                    "updated_at": submitted_at,
+                    "close_order_submitted_event_id": close_order_submitted_event_id,
+                    "simulated_close_order_id": simulated_close_order_id,
+                    "close_order_ref": close_order_ref,
+                    "dry_run": dry_run,
+                }
+            )
+            close_intents[close_intent_id] = updated
+            self.save()
+            return deepcopy(updated)
 
     def list_close_intents(
         self,
@@ -664,7 +718,7 @@ class StateStore:
         existing = position.get("active_close_intent_id")
         if existing:
             active = self.get_close_intent(str(existing))
-            if active is not None and active.get("status") == "created":
+            if active is not None and active.get("status") in ACTIVE_CLOSE_INTENT_STATUSES:
                 raise ValueError(
                     f"active close intent already exists for position_id={position_id!r}"
                 )
@@ -682,7 +736,7 @@ class StateStore:
             existing = current.get("active_close_intent_id")
             if existing:
                 active = self.get_close_intent(str(existing))
-                if active is not None and active.get("status") == "created":
+                if active is not None and active.get("status") in ACTIVE_CLOSE_INTENT_STATUSES:
                     raise ValueError(
                         f"active close intent already exists for position_id={position_id!r}"
                     )

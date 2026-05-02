@@ -332,6 +332,28 @@ class StateStoreCloseIntentTests(Phase3NCase):
                 )
             )
 
+    def test_submitted_close_intent_is_active_and_blocks_direct_duplicate(self) -> None:
+        submitted = self.close_record(
+            position_id="position:submitted-active",
+            close_intent_id="submitted:close",
+        )
+        self.state_store.state.setdefault("close_intents", {})[
+            submitted["close_intent_id"]
+        ] = dict(submitted, status="submitted")
+        self.state_store.save()
+
+        active = self.state_store.get_active_close_intent("position:submitted-active")
+        self.assertIsNotNone(active)
+        self.assertEqual(active["close_intent_id"], "submitted:close")
+        self.assertEqual(active["status"], "submitted")
+        with self.assertRaisesRegex(ValueError, "active close intent already exists"):
+            self.state_store.create_close_intent(
+                self.close_record(
+                    position_id="position:submitted-active",
+                    close_intent_id="second:close",
+                )
+            )
+
     def test_close_intent_numeric_validation_rejects_bool_and_string(self) -> None:
         for field in ("quantity", "entry_price"):
             for value in (True, "1"):
@@ -712,8 +734,12 @@ class SystemStatusCloseIntentTests(Phase3NCase):
         code, stdout, stderr = self.run_status(["--json"])
         self.assertEqual(code, 0, stderr)
         payload = json.loads(stdout)
-        self.assertEqual(payload["close_intent_counts_by_status"], {"created": 0})
+        self.assertEqual(
+            payload["close_intent_counts_by_status"],
+            {"created": 0, "submitted": 0},
+        )
         self.assertEqual(payload["created_close_intents_count"], 0)
+        self.assertEqual(payload["submitted_close_intents_count"], 0)
         self.assertEqual(payload["total_close_intents_count"], 0)
 
         self.create_position(S01_VOL_BASELINE, "position:status:s01")
@@ -734,15 +760,23 @@ class SystemStatusCloseIntentTests(Phase3NCase):
         code, stdout, stderr = self.run_status(["--json"])
         self.assertEqual(code, 0, stderr)
         payload = json.loads(stdout)
-        self.assertEqual(payload["close_intent_counts_by_status"], {"created": 2})
+        self.assertEqual(
+            payload["close_intent_counts_by_status"],
+            {"created": 2, "submitted": 0},
+        )
         self.assertEqual(payload["created_close_intents_count"], 2)
+        self.assertEqual(payload["submitted_close_intents_count"], 0)
         self.assertEqual(payload["total_close_intents_count"], 2)
 
         code, stdout, stderr = self.run_status(["--json", "--strategy-id", S01_VOL_BASELINE])
         self.assertEqual(code, 0, stderr)
         payload = json.loads(stdout)
-        self.assertEqual(payload["close_intent_counts_by_status"], {"created": 1})
+        self.assertEqual(
+            payload["close_intent_counts_by_status"],
+            {"created": 1, "submitted": 0},
+        )
         self.assertEqual(payload["created_close_intents_count"], 1)
+        self.assertEqual(payload["submitted_close_intents_count"], 0)
         self.assertEqual(payload["total_close_intents_count"], 1)
 
     def test_status_remains_read_only(self) -> None:
