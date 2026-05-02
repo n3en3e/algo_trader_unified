@@ -46,6 +46,23 @@ class DryRunCloseOrderStatus(TypedDict):
     action: str
 
 
+class DryRunCloseFillStatus(TypedDict):
+    dry_run: bool
+    close_intent_id: str
+    position_id: str
+    strategy_id: str
+    symbol: str | None
+    close_order_ref: str
+    simulated_close_order_id: str
+    close_fill_id: str
+    close_fill_price: float | Decimal
+    close_fill_quantity: int | float | Decimal
+    checked_at: str
+    filled_at: str
+    status: str
+    action: str
+
+
 class DryRunOrderStatus(TypedDict):
     dry_run: bool
     simulated_order_id: str
@@ -168,6 +185,35 @@ class DryRunExecutionAdapter:
             "checked_at": checked_at,
             "confirmed_at": checked_at,
             "status": "confirmed",
+            "action": "close",
+        }
+
+    def check_close_fills(
+        self,
+        *,
+        close_intent: dict[str, Any],
+        simulated_close_order_id: str,
+        checked_at: str,
+    ) -> DryRunCloseFillStatus:
+        digest = sha256(
+            f"{simulated_close_order_id}|{close_intent['close_intent_id']}|{checked_at}".encode(
+                "utf-8"
+            )
+        ).hexdigest()[:16]
+        return {
+            "dry_run": True,
+            "close_intent_id": close_intent["close_intent_id"],
+            "position_id": close_intent["position_id"],
+            "strategy_id": close_intent["strategy_id"],
+            "symbol": close_intent.get("symbol"),
+            "close_order_ref": close_intent["close_order_ref"],
+            "simulated_close_order_id": simulated_close_order_id,
+            "close_fill_id": f"close_fill_{digest}",
+            "close_fill_price": close_intent["entry_price"],
+            "close_fill_quantity": close_intent["quantity"],
+            "checked_at": checked_at,
+            "filled_at": checked_at,
+            "status": "filled",
             "action": "close",
         }
 

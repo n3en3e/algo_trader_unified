@@ -45,7 +45,7 @@ class CloseIntentTransitionError(ValueError):
     """Raised when a close intent lifecycle transition is invalid."""
 
 
-ACTIVE_CLOSE_INTENT_STATUSES = {"created", "submitted", "confirmed"}
+ACTIVE_CLOSE_INTENT_STATUSES = {"created", "submitted", "confirmed", "filled"}
 
 
 class PositionBook(dict):
@@ -731,6 +731,103 @@ class StateStore:
                     "updated_at": confirmed_at,
                     "close_order_confirmed_event_id": close_order_confirmed_event_id,
                     "simulated_close_order_id": simulated_close_order_id,
+                    "dry_run": dry_run,
+                }
+            )
+            close_intents[close_intent_id] = updated
+            self.save()
+            return deepcopy(updated)
+
+    def fill_close_intent(
+        self,
+        close_intent_id: str,
+        *,
+        filled_at: str,
+        close_fill_confirmed_event_id: str,
+        simulated_close_order_id: str,
+        close_fill_id: str,
+        close_fill_price: float | Decimal,
+        close_fill_quantity: int | float | Decimal,
+        dry_run: bool = True,
+    ) -> dict[str, Any]:
+        if dry_run is not True:
+            raise CloseIntentTransitionError("close fill dry_run must be True")
+        if not isinstance(close_fill_id, str) or not close_fill_id:
+            raise CloseIntentTransitionError("close_fill_id must be a non-empty string")
+        validated_price = validate_numeric_field(
+            "close_fill_price",
+            close_fill_price,
+            minimum=0,
+            allow_equal=True,
+            allow_int=False,
+        )
+        validated_quantity = validate_numeric_field(
+            "close_fill_quantity",
+            close_fill_quantity,
+            minimum=0,
+            allow_equal=False,
+            allow_int=True,
+        )
+        close_intents = self.state.setdefault("close_intents", {})
+        intent = close_intents.get(close_intent_id)
+        if intent is None:
+            raise KeyError(f"close intent {close_intent_id!r} does not exist")
+        if not isinstance(intent, dict):
+            raise CloseIntentTransitionError(
+                f"close intent {close_intent_id!r} is malformed"
+            )
+        strategy_id = intent.get("strategy_id")
+        if not isinstance(strategy_id, str) or not strategy_id:
+            raise CloseIntentTransitionError(
+                f"close intent {close_intent_id!r} has no strategy_id"
+            )
+        with self.get_strategy_lock(strategy_id):
+            current = close_intents.get(close_intent_id)
+            if current is None:
+                raise KeyError(f"close intent {close_intent_id!r} does not exist")
+            if current.get("status") != "confirmed":
+                raise CloseIntentTransitionError(
+                    f"close intent {close_intent_id!r} status is {current.get('status')!r}, not 'confirmed'"
+                )
+            if not current.get("close_order_submitted_event_id"):
+                raise CloseIntentTransitionError(
+                    f"close intent {close_intent_id!r} is missing close_order_submitted_event_id"
+                )
+            if not current.get("close_order_confirmed_event_id"):
+                raise CloseIntentTransitionError(
+                    f"close intent {close_intent_id!r} is missing close_order_confirmed_event_id"
+                )
+            existing_simulated_id = current.get("simulated_close_order_id")
+            if not existing_simulated_id:
+                raise CloseIntentTransitionError(
+                    f"close intent {close_intent_id!r} is missing simulated_close_order_id"
+                )
+            if existing_simulated_id != simulated_close_order_id:
+                raise CloseIntentTransitionError(
+                    f"close intent {close_intent_id!r} simulated_close_order_id is {existing_simulated_id!r}, not {simulated_close_order_id!r}"
+                )
+            quantity = validate_numeric_field(
+                "quantity",
+                current.get("quantity"),
+                minimum=0,
+                allow_equal=False,
+                allow_int=True,
+            )
+            if validated_quantity != quantity:
+                raise CloseIntentTransitionError(
+                    f"close intent {close_intent_id!r} close_fill_quantity {validated_quantity!r} does not equal quantity {quantity!r}"
+                )
+            updated = deepcopy(current)
+            updated.update(
+                {
+                    "status": "filled",
+                    "filled_at": filled_at,
+                    "updated_at": filled_at,
+                    "close_fill_confirmed_event_id": close_fill_confirmed_event_id,
+                    "simulated_close_order_id": simulated_close_order_id,
+                    "close_fill_id": close_fill_id,
+                    "close_fill_price": validated_price,
+                    "close_fill_quantity": validated_quantity,
                     "dry_run": dry_run,
                 }
             )
