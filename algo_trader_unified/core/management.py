@@ -33,6 +33,7 @@ def default_management_signal_provider(*, position: dict[str, Any], now: str) ->
 
 def _empty_result() -> dict[str, Any]:
     return {
+        "dry_run": True,
         "evaluated_count": 0,
         "close_intents_created_count": 0,
         "skipped_active_close_intent_count": 0,

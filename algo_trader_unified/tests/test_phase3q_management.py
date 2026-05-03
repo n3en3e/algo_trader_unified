@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import contextlib
+import inspect
 import io
 import json
 import tempfile
@@ -184,6 +185,50 @@ class ManagementSignalResultTests(Phase3QCase):
 
 
 class ManagementRunnerTests(Phase3QCase):
+    def test_core_result_schema_owns_dry_run_for_default_no_action_provider(self) -> None:
+        self.create_position(S01_VOL_BASELINE, "position:s01")
+        before_state = deepcopy(self.state_store.state)
+
+        result = run_management_scan(
+            state_store=self.state_store,
+            ledger=self.ledger,
+            now=NOW,
+        )
+
+        self.assertIs(result["dry_run"], True)
+        self.assertIs(type(result["dry_run"]), bool)
+        self.assertNotIn("dry_run", inspect.signature(run_management_scan).parameters)
+        self.assertEqual(
+            set(result),
+            {
+                "dry_run",
+                "evaluated_count",
+                "close_intents_created_count",
+                "skipped_active_close_intent_count",
+                "no_action_count",
+                "errors_count",
+                "created_close_intents",
+                "skipped",
+                "no_action",
+                "errors",
+            },
+        )
+        for key in (
+            "evaluated_count",
+            "close_intents_created_count",
+            "skipped_active_close_intent_count",
+            "no_action_count",
+            "errors_count",
+        ):
+            self.assertIs(type(result[key]), int)
+        for key in ("created_close_intents", "skipped", "no_action", "errors"):
+            self.assertIs(type(result[key]), list)
+        self.assertEqual(result["evaluated_count"], 1)
+        self.assertEqual(result["no_action_count"], 1)
+        self.assertEqual(self.state_store.state, before_state)
+        self.assertEqual(self.order_events(), [])
+        self.assertEqual(self.execution_events(), [])
+
     def test_no_action_does_not_write_ledger_or_mutate_state_for_s01_and_s02(self) -> None:
         self.create_position(S01_VOL_BASELINE, "position:s01")
         self.create_position(S02_VOL_ENHANCED, "position:s02")
@@ -362,7 +407,9 @@ class ManagementCliTests(Phase3QCase):
         self.assertEqual(code, 0)
         self.assertEqual(stderr, "")
         payload = json.loads(stdout)
-        self.assertEqual(payload["dry_run"], True)
+        self.assertEqual(stdout, json.dumps(payload, separators=(",", ":"), sort_keys=True) + "\n")
+        self.assertIs(payload["dry_run"], True)
+        self.assertIs(type(payload["dry_run"]), bool)
         self.assertEqual(payload["close_intents_created_count"], 0)
 
     def test_cli_injected_provider_can_create_close_intent(self) -> None:
@@ -375,6 +422,8 @@ class ManagementCliTests(Phase3QCase):
         self.assertEqual(code, 0)
         self.assertEqual(stderr, "")
         payload = json.loads(stdout)
+        self.assertIs(payload["dry_run"], True)
+        self.assertIs(type(payload["dry_run"]), bool)
         self.assertEqual(payload["close_intents_created_count"], 1)
         self.assertEqual([event["event_type"] for event in self.order_events()], ["CLOSE_INTENT_CREATED"])
 
@@ -466,3 +515,5 @@ class ManagementSafetyTests(Phase3QCase):
         combined = "\n".join(sources.values())
         self.assertNotIn("0DTE", combined)
         self.assertNotIn("commodity" + "_vrp", combined.lower())
+        self.assertNotIn('result["dry_run"]', sources["tool"])
+        self.assertNotIn("result['dry_run']", sources["tool"])

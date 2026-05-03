@@ -76,7 +76,6 @@ def main(argv: list[str] | None = None) -> int:
         management_signal_provider=DEFAULT_MANAGEMENT_SIGNAL_PROVIDER,
         now=now,
     )
-    result["dry_run"] = True
 
     if args.json_output:
         print(json.dumps(result, separators=(",", ":"), sort_keys=True))
