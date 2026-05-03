@@ -9,7 +9,9 @@ from typing import Callable
 from algo_trader_unified.config.portfolio import S01_VOL_BASELINE, S02_VOL_ENHANCED
 from algo_trader_unified.config.scheduler import (
     JOB_MARKET_OPEN_SCAN,
+    JOB_S01_MANAGEMENT_SCAN,
     JOB_S01_VOL_SCAN,
+    JOB_S02_MANAGEMENT_SCAN,
     JOB_S02_VOL_SCAN,
     JOB_SPECS,
     SCHEDULER_TIMEZONE,
@@ -21,6 +23,7 @@ from algo_trader_unified.jobs.readiness import (
     all_clear_health_snapshot,
     market_open_scan,
 )
+from algo_trader_unified.jobs.management import run_management_scan_job
 from algo_trader_unified.jobs.vol import run_s01_vol_scan, run_s02_vol_scan
 
 
@@ -100,7 +103,7 @@ class UnifiedScheduler:
                 **spec.trigger_kwargs,
             )
 
-    def run_job_once(self, job_id: str, **kwargs) -> JobRunResult:
+    def run_job_once(self, job_id: str, **kwargs) -> JobRunResult | dict:
         if job_id not in self.job_specs:
             raise JobNotFoundError(f"Unknown scheduler job_id: {job_id}")
         started_at = datetime.now(timezone.utc).isoformat()
@@ -142,6 +145,22 @@ class UnifiedScheduler:
             )
             status = result.status
             detail = result.detail
+        elif job_id == JOB_S01_MANAGEMENT_SCAN:
+            kwargs.pop("strategy_id", None)
+            return run_management_scan_job(
+                strategy_id=S01_VOL_BASELINE,
+                state_store=kwargs.pop("state_store", self.state_store),
+                ledger=kwargs.pop("ledger", self.ledger),
+                **kwargs,
+            )
+        elif job_id == JOB_S02_MANAGEMENT_SCAN:
+            kwargs.pop("strategy_id", None)
+            return run_management_scan_job(
+                strategy_id=S02_VOL_ENHANCED,
+                state_store=kwargs.pop("state_store", self.state_store),
+                ledger=kwargs.pop("ledger", self.ledger),
+                **kwargs,
+            )
         else:
             detail = "noop"
 

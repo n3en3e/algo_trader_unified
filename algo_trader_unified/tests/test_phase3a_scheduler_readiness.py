@@ -21,7 +21,9 @@ from algo_trader_unified.config.scheduler import (
     JOB_KEEPALIVE,
     JOB_MARKET_OPEN_SCAN,
     JOB_RISK_MONITOR,
+    JOB_S01_MANAGEMENT_SCAN,
     JOB_S01_VOL_SCAN,
+    JOB_S02_MANAGEMENT_SCAN,
     JOB_S02_VOL_SCAN,
     JOB_SPECS,
     JOB_WEEKLY_DIGEST,
@@ -93,6 +95,8 @@ class SchedulerConfigTests(unittest.TestCase):
                 JOB_WEEKLY_DIGEST,
                 JOB_S01_VOL_SCAN,
                 JOB_S02_VOL_SCAN,
+                JOB_S01_MANAGEMENT_SCAN,
+                JOB_S02_MANAGEMENT_SCAN,
             },
             set(JOB_SPECS),
         )
@@ -103,6 +107,8 @@ class SchedulerConfigTests(unittest.TestCase):
             self.assertEqual(spec.coalesce, DEFAULT_COALESCE)
         self.assertTrue(JOB_SPECS[JOB_S01_VOL_SCAN].enabled)
         self.assertTrue(JOB_SPECS[JOB_S02_VOL_SCAN].enabled)
+        self.assertTrue(JOB_SPECS[JOB_S01_MANAGEMENT_SCAN].enabled)
+        self.assertTrue(JOB_SPECS[JOB_S02_MANAGEMENT_SCAN].enabled)
         self.assertFalse(any("0dte" in job_id.lower() for job_id in JOB_SPECS))
 
 
@@ -163,6 +169,7 @@ class JobsPackageTests(unittest.TestCase):
     def test_jobs_package_imports(self) -> None:
         self.assertTrue(source_path("jobs", "__init__.py").exists())
         importlib.import_module("algo_trader_unified.jobs.readiness")
+        importlib.import_module("algo_trader_unified.jobs.management")
 
 
 class LazyAPSchedulerTests(TmpCase):

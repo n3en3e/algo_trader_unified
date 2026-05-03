@@ -22,6 +22,8 @@ JOB_DAILY_DIGEST = "daily_digest"
 JOB_WEEKLY_DIGEST = "weekly_digest"
 JOB_S01_VOL_SCAN = "s01_vol_scan_stub"
 JOB_S02_VOL_SCAN = "s02_vol_scan_stub"
+JOB_S01_MANAGEMENT_SCAN = "s01_management_scan"
+JOB_S02_MANAGEMENT_SCAN = "s02_management_scan"
 
 
 @dataclass(frozen=True)
@@ -79,6 +81,20 @@ JOB_SPECS: dict[str, JobSpec] = {
         description="Dry-run S02 vol signal scan",
         trigger_type="cron",
         trigger_kwargs={"day_of_week": "mon-fri", "hour": 9, "minute": 45},
+        enabled=True,
+    ),
+    JOB_S01_MANAGEMENT_SCAN: JobSpec(
+        job_id=JOB_S01_MANAGEMENT_SCAN,
+        description="Dry-run S01 management scan",
+        trigger_type="cron",
+        trigger_kwargs={"day_of_week": "mon-fri", "hour": 15, "minute": 50},
+        enabled=True,
+    ),
+    JOB_S02_MANAGEMENT_SCAN: JobSpec(
+        job_id=JOB_S02_MANAGEMENT_SCAN,
+        description="Dry-run S02 management scan",
+        trigger_type="cron",
+        trigger_kwargs={"day_of_week": "mon-fri", "hour": 15, "minute": 55},
         enabled=True,
     ),
 }
