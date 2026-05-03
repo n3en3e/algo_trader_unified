@@ -675,7 +675,7 @@ class SystemStatusConfirmedCloseIntentTests(Phase3O2Case):
         summary = system_status.build_summary([], [], self.state_store.list_close_intents())
         self.assertEqual(
             summary["close_intent_counts_by_status"],
-            {"created": 0, "submitted": 1, "confirmed": 1, "filled": 0},
+            {"created": 0, "submitted": 1, "confirmed": 1, "filled": 0, "position_closed": 0},
         )
         self.assertEqual(summary["submitted_close_intents_count"], 1)
         self.assertEqual(summary["confirmed_close_intents_count"], 1)
@@ -688,7 +688,7 @@ class SystemStatusConfirmedCloseIntentTests(Phase3O2Case):
         )
         self.assertEqual(
             filtered["close_intent_counts_by_status"],
-            {"created": 0, "submitted": 0, "confirmed": 1, "filled": 0},
+            {"created": 0, "submitted": 0, "confirmed": 1, "filled": 0, "position_closed": 0},
         )
         self.assertEqual(s02["status"], "submitted")
 

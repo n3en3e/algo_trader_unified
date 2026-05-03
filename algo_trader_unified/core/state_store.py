@@ -546,6 +546,95 @@ class StateStore:
             records.append(deepcopy(position))
         return records
 
+    def close_position(
+        self,
+        position_id: str,
+        *,
+        closed_at: str,
+        position_closed_event_id: str,
+        close_intent_id: str,
+        close_fill_confirmed_event_id: str,
+        close_fill_price: float | Decimal,
+        close_fill_quantity: int | float | Decimal,
+        realized_pnl: int | float | Decimal,
+        dry_run: bool = True,
+    ) -> dict[str, Any]:
+        if dry_run is not True:
+            raise ValueError("position close dry_run must be True")
+        validated_close_fill_price = validate_numeric_field(
+            "close_fill_price",
+            close_fill_price,
+            minimum=0,
+            allow_equal=True,
+            allow_int=True,
+        )
+        validated_close_fill_quantity = validate_numeric_field(
+            "close_fill_quantity",
+            close_fill_quantity,
+            minimum=0,
+            allow_equal=False,
+            allow_int=True,
+        )
+        if isinstance(realized_pnl, bool) or not isinstance(realized_pnl, (int, float, Decimal)):
+            raise ValueError(f"realized_pnl must be numeric, not {type(realized_pnl).__name__}")
+        validated_realized_pnl = float(realized_pnl) if isinstance(realized_pnl, Decimal) else realized_pnl
+        positions = _normalize_positions_collection(self.state.get("positions", {}))
+        position = positions.get(position_id)
+        if position is None:
+            raise KeyError(f"position {position_id!r} does not exist")
+        if position.get("status") != "open":
+            raise ValueError(
+                f"position {position_id!r} status is {position.get('status')!r}, not 'open'"
+            )
+        strategy_id = position.get("strategy_id")
+        if not isinstance(strategy_id, str) or not strategy_id:
+            raise ValueError(f"position {position_id!r} has no strategy_id")
+        with self.get_strategy_lock(strategy_id):
+            positions = _normalize_positions_collection(self.state.get("positions", {}))
+            current = positions.get(position_id)
+            if current is None:
+                raise KeyError(f"position {position_id!r} does not exist")
+            if current.get("status") != "open":
+                raise ValueError(
+                    f"position {position_id!r} status is {current.get('status')!r}, not 'open'"
+                )
+            active_close_intent_id = current.get("active_close_intent_id")
+            if active_close_intent_id != close_intent_id:
+                raise ValueError(
+                    f"position {position_id!r} active_close_intent_id is {active_close_intent_id!r}, not {close_intent_id!r}"
+                )
+            quantity = validate_numeric_field(
+                "quantity",
+                current.get("quantity"),
+                minimum=0,
+                allow_equal=False,
+                allow_int=True,
+            )
+            if validated_close_fill_quantity != quantity:
+                raise ValueError(
+                    f"position {position_id!r} close_fill_quantity {validated_close_fill_quantity!r} does not equal quantity {quantity!r}"
+                )
+            updated = deepcopy(current)
+            updated.update(
+                {
+                    "status": "closed",
+                    "closed_at": closed_at,
+                    "updated_at": closed_at,
+                    "position_closed_event_id": position_closed_event_id,
+                    "close_intent_id": close_intent_id,
+                    "close_fill_confirmed_event_id": close_fill_confirmed_event_id,
+                    "close_fill_price": validated_close_fill_price,
+                    "close_fill_quantity": validated_close_fill_quantity,
+                    "realized_pnl": validated_realized_pnl,
+                    "dry_run": True,
+                }
+            )
+            updated["active_close_intent_id"] = None
+            positions[position_id] = updated
+            self.state["positions"] = positions
+            self.save()
+            return deepcopy(updated)
+
     def create_close_intent(self, close_intent_record: dict[str, Any]) -> dict[str, Any]:
         strategy_id = close_intent_record.get("strategy_id")
         close_intent_id = close_intent_record.get("close_intent_id")
@@ -829,6 +918,51 @@ class StateStore:
                     "close_fill_price": validated_price,
                     "close_fill_quantity": validated_quantity,
                     "dry_run": dry_run,
+                }
+            )
+            close_intents[close_intent_id] = updated
+            self.save()
+            return deepcopy(updated)
+
+    def mark_close_intent_position_closed(
+        self,
+        close_intent_id: str,
+        *,
+        position_closed_event_id: str,
+        closed_at: str,
+    ) -> dict[str, Any]:
+        close_intents = self.state.setdefault("close_intents", {})
+        intent = close_intents.get(close_intent_id)
+        if intent is None:
+            raise KeyError(f"close intent {close_intent_id!r} does not exist")
+        if not isinstance(intent, dict):
+            raise CloseIntentTransitionError(
+                f"close intent {close_intent_id!r} is malformed"
+            )
+        strategy_id = intent.get("strategy_id")
+        if not isinstance(strategy_id, str) or not strategy_id:
+            raise CloseIntentTransitionError(
+                f"close intent {close_intent_id!r} has no strategy_id"
+            )
+        with self.get_strategy_lock(strategy_id):
+            current = close_intents.get(close_intent_id)
+            if current is None:
+                raise KeyError(f"close intent {close_intent_id!r} does not exist")
+            if current.get("status") != "filled":
+                raise CloseIntentTransitionError(
+                    f"close intent {close_intent_id!r} status is {current.get('status')!r}, not 'filled'"
+                )
+            if not current.get("close_fill_confirmed_event_id"):
+                raise CloseIntentTransitionError(
+                    f"close intent {close_intent_id!r} is missing close_fill_confirmed_event_id"
+                )
+            updated = deepcopy(current)
+            updated.update(
+                {
+                    "status": "position_closed",
+                    "position_closed_event_id": position_closed_event_id,
+                    "position_closed_at": closed_at,
+                    "updated_at": closed_at,
                 }
             )
             close_intents[close_intent_id] = updated

@@ -21,10 +21,12 @@ REQUIRED_SUMMARY_KEYS = {
     "position_counts_by_status",
     "close_intent_counts_by_status",
     "open_positions_count",
+    "closed_positions_count",
     "created_close_intents_count",
     "submitted_close_intents_count",
     "confirmed_close_intents_count",
     "filled_close_intents_count",
+    "position_closed_close_intents_count",
     "created_order_intents_count",
     "submitted_order_intents_count",
     "confirmed_order_intents_count",
@@ -151,6 +153,7 @@ class SystemStatusEmptyTests(SystemStatusCase):
         for status in EXPECTED_ORDER_INTENT_STATUS_KEYS:
             self.assertEqual(payload["order_intent_counts_by_status"][status], 0)
         self.assertEqual(payload["position_counts_by_status"]["open"], 0)
+        self.assertEqual(payload["position_counts_by_status"]["closed"], 0)
 
     def test_corrupt_state_file_returns_error_without_modifying_file(self) -> None:
         self.state_path.parent.mkdir(parents=True)
@@ -213,9 +216,11 @@ class SystemStatusEmptyTests(SystemStatusCase):
                     "  submitted: 0",
                     "  confirmed: 0",
                     "  filled: 0",
+                    "  position_closed: 0",
                     "Positions:",
                     "  total: 0",
                     "  open: 0",
+                    "  closed: 0",
                     "Stranded:",
                     "  total: 0",
                     "  submitted: 0",
@@ -259,7 +264,7 @@ class SystemStatusSummaryTests(SystemStatusCase):
                 "submitted": 1,
             },
         )
-        self.assertEqual(payload["position_counts_by_status"], {"open": 2})
+        self.assertEqual(payload["position_counts_by_status"], {"closed": 0, "open": 2})
         self.assertEqual(payload["created_order_intents_count"], 2)
         self.assertEqual(payload["submitted_order_intents_count"], 1)
         self.assertEqual(payload["confirmed_order_intents_count"], 1)

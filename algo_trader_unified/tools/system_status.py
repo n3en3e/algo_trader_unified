@@ -20,8 +20,8 @@ ORDER_INTENT_STATUSES = [
     "expired",
     "cancelled",
 ]
-POSITION_STATUSES = ["open"]
-CLOSE_INTENT_STATUSES = ["created", "submitted", "confirmed", "filled"]
+POSITION_STATUSES = ["open", "closed"]
+CLOSE_INTENT_STATUSES = ["created", "submitted", "confirmed", "filled", "position_closed"]
 
 
 def _dict_records(value: Any) -> list[dict[str, Any]]:
@@ -93,10 +93,12 @@ def build_summary(
         "position_counts_by_status": position_counts,
         "close_intent_counts_by_status": close_counts,
         "open_positions_count": position_counts["open"],
+        "closed_positions_count": position_counts["closed"],
         "created_close_intents_count": close_counts["created"],
         "submitted_close_intents_count": close_counts["submitted"],
         "confirmed_close_intents_count": close_counts["confirmed"],
         "filled_close_intents_count": close_counts["filled"],
+        "position_closed_close_intents_count": close_counts["position_closed"],
         "created_order_intents_count": created,
         "submitted_order_intents_count": submitted,
         "confirmed_order_intents_count": confirmed,
@@ -134,9 +136,11 @@ def format_human(summary: dict[str, Any]) -> str:
             f"  submitted: {summary['submitted_close_intents_count']}",
             f"  confirmed: {summary['confirmed_close_intents_count']}",
             f"  filled: {summary['filled_close_intents_count']}",
+            f"  position_closed: {summary['position_closed_close_intents_count']}",
             "Positions:",
             f"  total: {summary['total_positions_count']}",
             f"  open: {summary['open_positions_count']}",
+            f"  closed: {summary['closed_positions_count']}",
             "Stranded:",
             f"  total: {summary['stranded_order_intents_count']}",
             f"  submitted: {summary['stranded_submitted_intents_count']}",
