@@ -13,6 +13,7 @@ from unittest import mock
 from algo_trader_unified.config.portfolio import S01_VOL_BASELINE, S02_VOL_ENHANCED
 from algo_trader_unified.config.scheduler import (
     JOB_INTENT_CONFIRMATION,
+    JOB_INTENT_FILL_CONFIRMATION,
     JOB_SPECS,
 )
 from algo_trader_unified.core.close_intents import (
@@ -242,10 +243,10 @@ class SchedulerConfirmationConfigTests(unittest.TestCase):
             "s02_management_scan",
             "intent_submission",
             JOB_INTENT_CONFIRMATION,
+            JOB_INTENT_FILL_CONFIRMATION,
         }
         self.assertEqual(added_jobs, set())
         for job_id in JOB_SPECS:
-            self.assertNotIn("fill", job_id)
             self.assertNotIn("position_open", job_id)
             self.assertNotIn("position_close", job_id)
 
