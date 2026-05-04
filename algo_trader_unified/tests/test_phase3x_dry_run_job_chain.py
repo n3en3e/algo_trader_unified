@@ -49,6 +49,13 @@ ORDER_LIFECYCLE = [
 EXECUTION_LIFECYCLE = ["POSITION_OPENED", "POSITION_CLOSED"]
 
 
+def repo_root() -> Path:
+    for parent in Path(__file__).resolve().parents:
+        if (parent / "algo_trader_unified").is_dir() and (parent / ".git").exists():
+            return parent
+    raise RuntimeError("repository root not found")
+
+
 class Phase3XCase(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
@@ -317,7 +324,7 @@ class RunDryRunChainCliTests(unittest.TestCase):
                 "not-a-time",
                 "--json",
             ],
-            cwd="/home/n3en3e/algo_trader_unified",
+            cwd=repo_root(),
             text=True,
             capture_output=True,
             check=False,
