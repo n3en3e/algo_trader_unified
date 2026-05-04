@@ -20,6 +20,23 @@ python3 -m unittest discover -s algo_trader_unified/tests
 python3 -m unittest algo_trader_unified.tests.test_phase3w_e2e_dry_run_lifecycle
 ```
 
+## One-Shot Chain Runner
+
+The manual chain runner executes the configured dry-run scheduler jobs once and exits. It does not start a scheduler, install a service, connect to a broker, or fetch market data.
+
+Default entry-scan behavior is safe: without an injected test signal provider, the chain skips entry scans and still runs downstream jobs once, which no-op on empty state.
+
+Examples:
+
+```bash
+python3 -m algo_trader_unified.tools.run_dry_run_chain --root-dir <test-root>
+python3 -m algo_trader_unified.tools.run_dry_run_chain --root-dir <test-root> --json
+python3 -m algo_trader_unified.tools.run_dry_run_chain --root-dir <test-root> --strategy-id S01_VOL_BASELINE --skip-entry-scan --skip-management-scan
+python3 -m algo_trader_unified.tools.run_dry_run_chain --root-dir <test-root> --json --skip-position-transitions
+```
+
+Use `--now 2026-05-04T16:00:00Z` to pin timestamps. The `--dry-run` flag is accepted for operator clarity; the runner is dry-run only.
+
 ## Lifecycle Sequence
 
 Entry:
@@ -61,7 +78,7 @@ Ledger files to inspect under the selected test root:
 ## Safety Notes
 
 - Keep smoke validation on temp or test state.
-- Do not run against production state.
+- Do not point the chain runner at production state unless intentionally doing operator dry-run validation.
 - Do not start a live scheduler.
 - Do not add deployment service changes for this smoke.
 - Do not use broker credentials or live market data.
