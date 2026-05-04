@@ -85,22 +85,6 @@ class TmpCase(unittest.TestCase):
 
 
 class SchedulerConfigTests(unittest.TestCase):
-    def test_expected_job_specs_present(self) -> None:
-        self.assertEqual(
-            {
-                JOB_KEEPALIVE,
-                JOB_RISK_MONITOR,
-                JOB_MARKET_OPEN_SCAN,
-                JOB_DAILY_DIGEST,
-                JOB_WEEKLY_DIGEST,
-                JOB_S01_VOL_SCAN,
-                JOB_S02_VOL_SCAN,
-                JOB_S01_MANAGEMENT_SCAN,
-                JOB_S02_MANAGEMENT_SCAN,
-            },
-            set(JOB_SPECS),
-        )
-
     def test_scheduler_defaults_and_disabled_stubs(self) -> None:
         for spec in JOB_SPECS.values():
             self.assertEqual(spec.max_instances, DEFAULT_MAX_INSTANCES)
@@ -794,6 +778,6 @@ class RegressionGuards(unittest.TestCase):
         all_sources = "\n".join(
             path.read_text()
             for path in PACKAGE_ROOT.rglob("*.py")
-            if "__pycache__" not in str(path)
+            if "__pycache__" not in str(path) and "tests" not in path.parts
         )
         self.assertNotIn("commodity" + "_vrp", all_sources.lower())

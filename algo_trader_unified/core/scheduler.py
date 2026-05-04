@@ -8,6 +8,7 @@ from typing import Callable
 
 from algo_trader_unified.config.portfolio import S01_VOL_BASELINE, S02_VOL_ENHANCED
 from algo_trader_unified.config.scheduler import (
+    JOB_INTENT_SUBMISSION,
     JOB_MARKET_OPEN_SCAN,
     JOB_S01_MANAGEMENT_SCAN,
     JOB_S01_VOL_SCAN,
@@ -24,6 +25,7 @@ from algo_trader_unified.jobs.readiness import (
     market_open_scan,
 )
 from algo_trader_unified.jobs.management import run_management_scan_job
+from algo_trader_unified.jobs.submission import run_intent_submission_job
 from algo_trader_unified.jobs.vol import run_s01_vol_scan, run_s02_vol_scan
 
 
@@ -157,6 +159,12 @@ class UnifiedScheduler:
             kwargs.pop("strategy_id", None)
             return run_management_scan_job(
                 strategy_id=S02_VOL_ENHANCED,
+                state_store=kwargs.pop("state_store", self.state_store),
+                ledger=kwargs.pop("ledger", self.ledger),
+                **kwargs,
+            )
+        elif job_id == JOB_INTENT_SUBMISSION:
+            return run_intent_submission_job(
                 state_store=kwargs.pop("state_store", self.state_store),
                 ledger=kwargs.pop("ledger", self.ledger),
                 **kwargs,

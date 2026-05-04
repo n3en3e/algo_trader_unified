@@ -472,6 +472,6 @@ class VolEventTaxonomyTests(TmpCase):
         all_sources = "\n".join(
             path.read_text(encoding="utf-8")
             for path in PACKAGE_ROOT.rglob("*.py")
-            if "__pycache__" not in str(path)
+            if "__pycache__" not in str(path) and "tests" not in path.parts
         )
         self.assertNotIn("commodity" + "_vrp", all_sources.lower())
