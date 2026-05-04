@@ -210,6 +210,6 @@ class UnifiedScheduler:
             self.build_scheduler()
         self.scheduler.start()
 
-    def shutdown(self) -> None:
+    def shutdown(self, wait: bool = True) -> None:
         if self.scheduler is not None:
-            self.scheduler.shutdown()
+            self.scheduler.shutdown(wait=wait)
