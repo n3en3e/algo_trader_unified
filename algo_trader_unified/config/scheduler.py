@@ -25,6 +25,7 @@ JOB_S02_VOL_SCAN = "s02_vol_scan_stub"
 JOB_S01_MANAGEMENT_SCAN = "s01_management_scan"
 JOB_S02_MANAGEMENT_SCAN = "s02_management_scan"
 JOB_INTENT_SUBMISSION = "intent_submission"
+JOB_INTENT_CONFIRMATION = "intent_confirmation"
 
 
 @dataclass(frozen=True)
@@ -103,6 +104,13 @@ JOB_SPECS: dict[str, JobSpec] = {
         description="Dry-run created intent submission",
         trigger_type="cron",
         trigger_kwargs={"day_of_week": "mon-fri", "hour": 15, "minute": 59},
+        enabled=True,
+    ),
+    JOB_INTENT_CONFIRMATION: JobSpec(
+        job_id=JOB_INTENT_CONFIRMATION,
+        description="Dry-run submitted intent confirmation",
+        trigger_type="cron",
+        trigger_kwargs={"day_of_week": "mon-fri", "hour": 16, "minute": 0},
         enabled=True,
     ),
 }

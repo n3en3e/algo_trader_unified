@@ -8,6 +8,7 @@ from typing import Callable
 
 from algo_trader_unified.config.portfolio import S01_VOL_BASELINE, S02_VOL_ENHANCED
 from algo_trader_unified.config.scheduler import (
+    JOB_INTENT_CONFIRMATION,
     JOB_INTENT_SUBMISSION,
     JOB_MARKET_OPEN_SCAN,
     JOB_S01_MANAGEMENT_SCAN,
@@ -18,6 +19,7 @@ from algo_trader_unified.config.scheduler import (
     SCHEDULER_TIMEZONE,
     JobSpec,
 )
+from algo_trader_unified.jobs.confirmation import run_intent_confirmation_job
 from algo_trader_unified.core.readiness import ReadinessManager
 from algo_trader_unified.jobs.readiness import (
     HealthSnapshot,
@@ -165,6 +167,12 @@ class UnifiedScheduler:
             )
         elif job_id == JOB_INTENT_SUBMISSION:
             return run_intent_submission_job(
+                state_store=kwargs.pop("state_store", self.state_store),
+                ledger=kwargs.pop("ledger", self.ledger),
+                **kwargs,
+            )
+        elif job_id == JOB_INTENT_CONFIRMATION:
+            return run_intent_confirmation_job(
                 state_store=kwargs.pop("state_store", self.state_store),
                 ledger=kwargs.pop("ledger", self.ledger),
                 **kwargs,
