@@ -11,11 +11,7 @@ from pathlib import Path
 from unittest import mock
 
 from algo_trader_unified.config.portfolio import S01_VOL_BASELINE, S02_VOL_ENHANCED
-from algo_trader_unified.config.scheduler import (
-    JOB_INTENT_FILL_CONFIRMATION,
-    JOB_POSITION_TRANSITIONS,
-    JOB_SPECS,
-)
+from algo_trader_unified.config.scheduler import JOB_POSITION_TRANSITIONS, JOB_SPECS
 from algo_trader_unified.core.close_intents import (
     confirm_close_fill,
     confirm_close_order,
@@ -40,36 +36,16 @@ from algo_trader_unified.core.state_store import StateStore
 from algo_trader_unified.jobs.confirmation import run_intent_confirmation_job
 from algo_trader_unified.jobs.fill_confirmation import run_intent_fill_confirmation_job
 from algo_trader_unified.jobs.management import run_management_scan_job
+from algo_trader_unified.jobs.position_transitions import run_position_transitions_job
 from algo_trader_unified.jobs.submission import run_intent_submission_job
 from algo_trader_unified.jobs.vol import run_s01_vol_scan
 from algo_trader_unified.strategies.vol.signals import VolSignalInput
 
 
-NOW = "2026-05-04T16:01:00+00:00"
+NOW = "2026-05-04T16:02:00+00:00"
 
 
-class RecordingFillAdapter(DryRunExecutionAdapter):
-    def __init__(self) -> None:
-        self.calls = []
-
-    def check_for_fills(self, *, simulated_order_id, intent, checked_at):
-        self.calls.append(("order", intent["intent_id"]))
-        return super().check_for_fills(
-            simulated_order_id=simulated_order_id,
-            intent=intent,
-            checked_at=checked_at,
-        )
-
-    def check_close_fills(self, *, close_intent, simulated_close_order_id, checked_at):
-        self.calls.append(("close", close_intent["close_intent_id"]))
-        return super().check_close_fills(
-            close_intent=close_intent,
-            simulated_close_order_id=simulated_close_order_id,
-            checked_at=checked_at,
-        )
-
-
-class Phase3UCase(unittest.TestCase):
+class Phase3VCase(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name)
@@ -94,9 +70,10 @@ class Phase3UCase(unittest.TestCase):
         intent_id: str,
         *,
         strategy_id: str = S01_VOL_BASELINE,
-        status: str = "confirmed",
-        confirmed_at: str | None = "2026-05-04T16:00:00+00:00",
+        status: str = "filled",
+        filled_at: str | None = "2026-05-04T16:01:00+00:00",
         dry_run: bool | None = True,
+        fill_price: object = 0.75,
     ) -> dict:
         record = {
             "intent_id": intent_id,
@@ -109,17 +86,22 @@ class Phase3UCase(unittest.TestCase):
             "order_intent_created_event_id": f"evt_created_{intent_id}",
             "order_submitted_event_id": f"evt_submitted_{intent_id}",
             "order_confirmed_event_id": f"evt_confirmed_{intent_id}",
+            "fill_confirmed_event_id": f"evt_fill_{intent_id}",
             "order_ref": f"{strategy_id}|{intent_id}|OPEN",
             "created_at": "2026-05-04T15:40:00+00:00",
             "submitted_at": "2026-05-04T15:55:00+00:00",
-            "updated_at": confirmed_at or "2026-05-04T15:55:00+00:00",
+            "confirmed_at": "2026-05-04T16:00:00+00:00",
+            "updated_at": filled_at or "2026-05-04T16:00:00+00:00",
             "simulated_order_id": f"sim_{intent_id}",
+            "fill_id": f"fill_{intent_id}",
+            "fill_price": fill_price,
+            "fill_quantity": 1,
             "sizing_context": {},
             "risk_context": {},
             "signal_payload_snapshot": {},
         }
-        if confirmed_at is not None:
-            record["confirmed_at"] = confirmed_at
+        if filled_at is not None:
+            record["filled_at"] = filled_at
         if dry_run is not None:
             record["dry_run"] = dry_run
         self.state_store.state["order_intents"][intent_id] = record
@@ -158,15 +140,16 @@ class Phase3UCase(unittest.TestCase):
         *,
         strategy_id: str = S01_VOL_BASELINE,
         position_id: str | None = None,
-        status: str = "confirmed",
-        confirmed_at: str | None = "2026-05-04T16:00:30+00:00",
+        status: str = "filled",
+        filled_at: str | None = "2026-05-04T16:01:30+00:00",
         quantity: object = 2,
+        position_status: str = "open",
     ) -> dict:
         position_id = position_id or f"position:{close_intent_id}"
         if self.state_store.get_position(position_id) is None:
-            self.state_store.state["positions"][position_id] = self.position_record(
-                strategy_id, position_id
-            )
+            position = self.position_record(strategy_id, position_id)
+            position["status"] = position_status
+            self.state_store.state["positions"][position_id] = position
         record = {
             "close_intent_id": close_intent_id,
             "position_id": position_id,
@@ -178,23 +161,28 @@ class Phase3UCase(unittest.TestCase):
             "dry_run": True,
             "created_at": "2026-05-04T15:45:00+00:00",
             "submitted_at": "2026-05-04T15:56:00+00:00",
-            "updated_at": confirmed_at or "2026-05-04T15:56:00+00:00",
+            "confirmed_at": "2026-05-04T16:00:30+00:00",
+            "updated_at": filled_at or "2026-05-04T16:00:30+00:00",
             "close_reason": "management",
-            "requested_by": "phase3u",
+            "requested_by": "phase3v",
             "position_opened_event_id": "evt_opened",
             "source_signal_event_id": "evt_signal",
             "fill_confirmed_event_id": "evt_fill",
             "close_intent_created_event_id": f"evt_created_{close_intent_id}",
             "close_order_submitted_event_id": f"evt_submitted_{close_intent_id}",
             "close_order_confirmed_event_id": f"evt_confirmed_{close_intent_id}",
+            "close_fill_confirmed_event_id": f"evt_close_fill_{close_intent_id}",
             "close_order_ref": f"{strategy_id}:{position_id}:{close_intent_id}:close",
             "simulated_close_order_id": f"sim_close_{close_intent_id}",
+            "close_fill_id": f"close_fill_{close_intent_id}",
+            "close_fill_price": 0.85,
+            "close_fill_quantity": quantity,
             "quantity": quantity,
             "entry_price": 0.75,
             "action": "close",
         }
-        if confirmed_at is not None:
-            record["confirmed_at"] = confirmed_at
+        if filled_at is not None:
+            record["filled_at"] = filled_at
         self.state_store.state["close_intents"][close_intent_id] = record
         self.state_store.state["positions"][position_id][
             "active_close_intent_id"
@@ -203,7 +191,7 @@ class Phase3UCase(unittest.TestCase):
         return deepcopy(record)
 
     def run_job(self, **kwargs) -> dict:
-        return run_intent_fill_confirmation_job(
+        return run_position_transitions_job(
             state_store=self.state_store,
             ledger=self.ledger,
             now=NOW,
@@ -227,12 +215,12 @@ class Phase3UCase(unittest.TestCase):
         )
 
 
-class SchedulerFillConfirmationConfigTests(unittest.TestCase):
-    def test_intent_fill_confirmation_job_spec_is_registered_without_position_jobs(self) -> None:
-        self.assertEqual(JOB_INTENT_FILL_CONFIRMATION, "intent_fill_confirmation")
-        self.assertIn(JOB_INTENT_FILL_CONFIRMATION, JOB_SPECS)
-        self.assertTrue(JOB_SPECS[JOB_INTENT_FILL_CONFIRMATION].enabled)
-        self.assertIn("Dry-run", JOB_SPECS[JOB_INTENT_FILL_CONFIRMATION].description)
+class SchedulerPositionTransitionConfigTests(unittest.TestCase):
+    def test_position_transition_job_spec_is_registered_without_new_order_jobs(self) -> None:
+        self.assertEqual(JOB_POSITION_TRANSITIONS, "position_transitions")
+        self.assertIn(JOB_POSITION_TRANSITIONS, JOB_SPECS)
+        self.assertTrue(JOB_SPECS[JOB_POSITION_TRANSITIONS].enabled)
+        self.assertIn("Dry-run", JOB_SPECS[JOB_POSITION_TRANSITIONS].description)
         added_jobs = set(JOB_SPECS) - {
             "keepalive",
             "risk_monitor",
@@ -245,13 +233,10 @@ class SchedulerFillConfirmationConfigTests(unittest.TestCase):
             "s02_management_scan",
             "intent_submission",
             "intent_confirmation",
-            JOB_INTENT_FILL_CONFIRMATION,
+            "intent_fill_confirmation",
             JOB_POSITION_TRANSITIONS,
         }
         self.assertEqual(added_jobs, set())
-        for job_id in JOB_SPECS:
-            self.assertNotIn("position_open", job_id)
-            self.assertNotIn("position_close", job_id)
 
     def test_no_live_scheduler_start_behavior(self) -> None:
         source = Path("algo_trader_unified/core/scheduler.py").read_text(encoding="utf-8")
@@ -259,14 +244,14 @@ class SchedulerFillConfirmationConfigTests(unittest.TestCase):
         self.assertNotIn("BlockingScheduler", source)
 
 
-class IntentFillConfirmationJobTests(Phase3UCase):
-    def test_no_intents_returns_zeroes_without_mutation_or_writes(self) -> None:
+class PositionTransitionJobTests(Phase3VCase):
+    def test_no_filled_intents_returns_zeroes_without_mutation_or_writes(self) -> None:
         before = deepcopy(self.state_store.state)
         result = self.run_job()
         self.assertIs(result["dry_run"], True)
         for key in (
-            "filled_order_intents_count",
-            "filled_close_intents_count",
+            "positions_opened_count",
+            "positions_closed_count",
             "skipped_order_intents_count",
             "skipped_close_intents_count",
             "errors_count",
@@ -275,53 +260,82 @@ class IntentFillConfirmationJobTests(Phase3UCase):
         self.assertEqual(self.state_store.state, before)
         self.assertEqual(self.all_events(), [])
 
-    def test_open_side_order_intent_fill_uses_helper_only(self) -> None:
+    def test_open_side_position_transition_uses_helper_only(self) -> None:
         self.create_order_intent("s01:open")
         result = self.run_job()
-        self.assertEqual(result["filled_order_intents_count"], 1)
-        self.assertEqual(self.state_store.get_order_intent("s01:open")["status"], "filled")
-        self.assertEqual([event["event_type"] for event in self.all_events()], ["FILL_CONFIRMED"])
-        self.assertNotIn("POSITION_OPENED", {event["event_type"] for event in self.all_events()})
+        intent = self.state_store.get_order_intent("s01:open")
+        self.assertEqual(result["positions_opened_count"], 1)
+        self.assertEqual(intent["status"], "position_opened")
+        self.assertEqual([event["event_type"] for event in self.all_events()], ["POSITION_OPENED"])
+        self.assertTrue(
+            {"ORDER_SUBMITTED", "ORDER_CONFIRMED", "FILL_CONFIRMED"}.isdisjoint(
+                {event["event_type"] for event in self.all_events()}
+            )
+        )
 
-    def test_close_intent_fill_uses_helper_only(self) -> None:
+    def test_close_side_position_transition_uses_helper_only(self) -> None:
         self.create_close_intent("s01:close")
         result = self.run_job()
-        self.assertEqual(result["filled_close_intents_count"], 1)
-        self.assertEqual(self.state_store.get_close_intent("s01:close")["status"], "filled")
-        self.assertEqual(
-            [event["event_type"] for event in self.all_events()],
-            ["CLOSE_FILL_CONFIRMED"],
+        close_intent = self.state_store.get_close_intent("s01:close")
+        position = self.state_store.get_position("position:s01:close")
+        self.assertEqual(result["positions_closed_count"], 1)
+        self.assertEqual(close_intent["status"], "position_closed")
+        self.assertEqual(position["status"], "closed")
+        self.assertEqual([event["event_type"] for event in self.all_events()], ["POSITION_CLOSED"])
+        self.assertTrue(
+            {
+                "CLOSE_ORDER_SUBMITTED",
+                "CLOSE_ORDER_CONFIRMED",
+                "CLOSE_FILL_CONFIRMED",
+            }.isdisjoint({event["event_type"] for event in self.all_events()})
         )
-        self.assertNotIn("POSITION_CLOSED", {event["event_type"] for event in self.all_events()})
 
-    def test_mixed_batch_fills_open_side_before_close_side_deterministically(self) -> None:
-        adapter = RecordingFillAdapter()
-        self.create_close_intent("s01:close:b", confirmed_at="2026-05-04T16:00:40+00:00")
-        self.create_order_intent("s01:open:b", confirmed_at="2026-05-04T16:00:10+00:00")
-        self.create_close_intent("s01:close:a", confirmed_at="2026-05-04T16:00:30+00:00")
-        self.create_order_intent("s01:open:missing", confirmed_at=None)
-        self.create_order_intent("s01:open:a", confirmed_at="2026-05-04T16:00:10+00:00")
-        result = self.run_job(execution_adapter=adapter)
-        self.assertEqual(result["filled_order_intents_count"], 3)
-        self.assertEqual(result["filled_close_intents_count"], 2)
+    def test_mixed_batch_transitions_open_side_before_close_side_deterministically(self) -> None:
+        calls = []
+
+        def fake_open(*, state_store, ledger, intent_id, opened_at):
+            calls.append(("order", intent_id))
+            return {
+                "position_id": f"position:{intent_id}",
+                "intent_id": intent_id,
+                "strategy_id": "mock",
+                "status": "open",
+                "opened_at": opened_at,
+            }
+
+        def fake_close(*, state_store, ledger, close_intent_id, closed_at):
+            calls.append(("close", close_intent_id))
+            return {
+                "position_id": f"position:{close_intent_id}",
+                "close_intent_id": close_intent_id,
+                "strategy_id": "mock",
+                "status": "closed",
+                "closed_at": closed_at,
+            }
+
+        self.create_close_intent("close:b", strategy_id="CLOSE_B", filled_at="2026-05-04T16:01:40+00:00")
+        self.create_order_intent("open:b", strategy_id="OPEN_B", filled_at="2026-05-04T16:01:10+00:00")
+        self.create_close_intent("close:a", strategy_id="CLOSE_A", filled_at="2026-05-04T16:01:30+00:00")
+        self.create_order_intent("open:missing", strategy_id="OPEN_MISSING", filled_at=None)
+        self.create_order_intent("open:a", strategy_id="OPEN_A", filled_at="2026-05-04T16:01:10+00:00")
+        with mock.patch.dict(
+            run_position_transitions_job.__globals__,
+            {
+                "open_position_from_filled_intent": fake_open,
+                "close_position_from_filled_intent": fake_close,
+            },
+        ):
+            result = self.run_job()
+        self.assertEqual(result["positions_opened_count"], 3)
+        self.assertEqual(result["positions_closed_count"], 2)
         self.assertEqual(
-            adapter.calls,
+            calls,
             [
-                ("order", "s01:open:missing"),
-                ("order", "s01:open:a"),
-                ("order", "s01:open:b"),
-                ("close", "s01:close:a"),
-                ("close", "s01:close:b"),
-            ],
-        )
-        self.assertEqual(
-            [event["event_type"] for event in self.all_events()],
-            [
-                "FILL_CONFIRMED",
-                "FILL_CONFIRMED",
-                "FILL_CONFIRMED",
-                "CLOSE_FILL_CONFIRMED",
-                "CLOSE_FILL_CONFIRMED",
+                ("order", "open:missing"),
+                ("order", "open:a"),
+                ("order", "open:b"),
+                ("close", "close:a"),
+                ("close", "close:b"),
             ],
         )
 
@@ -332,82 +346,82 @@ class IntentFillConfirmationJobTests(Phase3UCase):
         self.create_close_intent("s02:close", strategy_id=S02_VOL_ENHANCED)
 
         s01 = self.run_job(strategy_id=S01_VOL_BASELINE)
-        self.assertEqual(s01["filled_order_intents_count"], 1)
-        self.assertEqual(s01["filled_close_intents_count"], 1)
-        self.assertEqual(self.state_store.get_order_intent("s02:open")["status"], "confirmed")
-        self.assertEqual(self.state_store.get_close_intent("s02:close")["status"], "confirmed")
+        self.assertEqual(s01["positions_opened_count"], 0)
+        self.assertEqual(s01["positions_closed_count"], 1)
+        self.assertEqual(self.state_store.get_order_intent("s02:open")["status"], "filled")
+        self.assertEqual(self.state_store.get_close_intent("s02:close")["status"], "filled")
 
         s02 = self.run_job(strategy_id=S02_VOL_ENHANCED)
-        self.assertEqual(s02["filled_order_intents_count"], 1)
-        self.assertEqual(s02["filled_close_intents_count"], 1)
+        self.assertEqual(s02["positions_opened_count"], 0)
+        self.assertEqual(s02["positions_closed_count"], 1)
 
         unknown = self.run_job(strategy_id="UNKNOWN")
-        self.assertEqual(unknown["filled_order_intents_count"], 0)
-        self.assertEqual(unknown["filled_close_intents_count"], 0)
+        self.assertEqual(unknown["positions_opened_count"], 0)
+        self.assertEqual(unknown["positions_closed_count"], 0)
         self.assertEqual(unknown["errors_count"], 0)
 
     def test_include_flags(self) -> None:
-        self.create_order_intent("open:skip")
-        self.create_close_intent("close:fill")
+        self.create_order_intent("open:skip", strategy_id="OPEN_SKIP")
+        self.create_close_intent("close:transition", strategy_id="CLOSE_ONLY")
         close_only = self.run_job(include_open_intents=False)
-        self.assertEqual(close_only["filled_order_intents_count"], 0)
-        self.assertEqual(close_only["filled_close_intents_count"], 1)
-        self.assertEqual(self.state_store.get_order_intent("open:skip")["status"], "confirmed")
+        self.assertEqual(close_only["positions_opened_count"], 0)
+        self.assertEqual(close_only["positions_closed_count"], 1)
+        self.assertEqual(self.state_store.get_order_intent("open:skip")["status"], "filled")
 
-        self.create_order_intent("open:fill")
-        self.create_close_intent("close:skip")
+        self.create_order_intent("open:transition", strategy_id="OPEN_ONLY")
+        self.create_close_intent("close:skip", strategy_id="CLOSE_SKIP")
         open_only = self.run_job(include_close_intents=False)
-        self.assertEqual(open_only["filled_order_intents_count"], 2)
-        self.assertEqual(open_only["filled_close_intents_count"], 0)
-        self.assertEqual(self.state_store.get_close_intent("close:skip")["status"], "confirmed")
+        self.assertEqual(open_only["positions_opened_count"], 2)
+        self.assertEqual(open_only["positions_closed_count"], 0)
+        self.assertEqual(self.state_store.get_close_intent("close:skip")["status"], "filled")
 
         before = deepcopy(self.state_store.state)
         before_events = self.all_events()
         neither = self.run_job(include_open_intents=False, include_close_intents=False)
-        self.assertEqual(neither["filled_order_intents_count"], 0)
-        self.assertEqual(neither["filled_close_intents_count"], 0)
+        self.assertEqual(neither["positions_opened_count"], 0)
+        self.assertEqual(neither["positions_closed_count"], 0)
         self.assertEqual(neither["skipped_order_intents_count"], 0)
         self.assertEqual(neither["skipped_close_intents_count"], 0)
         self.assertEqual(self.state_store.state, before)
         self.assertEqual(self.all_events(), before_events)
 
-    def test_skip_non_confirmed_intents(self) -> None:
-        for status in ("created", "submitted", "filled", "position_opened"):
-            self.create_order_intent(f"open:{status}", status=status)
-        for status in ("created", "submitted", "filled", "position_closed"):
-            self.create_close_intent(f"close:{status}", status=status)
+    def test_skip_non_filled_intents(self) -> None:
+        for status in ("created", "submitted", "confirmed", "position_opened"):
+            self.create_order_intent(f"open:{status}", strategy_id=f"OPEN_{status}", status=status)
+        for status in ("created", "submitted", "confirmed", "position_closed"):
+            self.create_close_intent(f"close:{status}", strategy_id=f"CLOSE_{status}", status=status)
         result = self.run_job()
-        self.assertEqual(result["filled_order_intents_count"], 0)
-        self.assertEqual(result["filled_close_intents_count"], 0)
+        self.assertEqual(result["positions_opened_count"], 0)
+        self.assertEqual(result["positions_closed_count"], 0)
         self.assertEqual(result["skipped_order_intents_count"], 4)
         self.assertEqual(result["skipped_close_intents_count"], 4)
         self.assertEqual(self.all_events(), [])
-        self.assertEqual({entry["reason"] for entry in result["skipped"]}, {"status_not_confirmed"})
+        self.assertEqual({entry["reason"] for entry in result["skipped"]}, {"status_not_filled"})
 
     def test_per_intent_order_error_records_and_continues(self) -> None:
-        self.create_order_intent("open:bad", dry_run=False)
-        self.create_order_intent("open:ok")
+        self.create_order_intent("open:bad", strategy_id="OPEN_BAD", dry_run=False)
+        self.create_order_intent("open:ok", strategy_id="OPEN_OK")
         result = self.run_job()
-        self.assertEqual(result["filled_order_intents_count"], 1)
+        self.assertEqual(result["positions_opened_count"], 1)
         self.assertEqual(result["errors_count"], 1)
         self.assertEqual(result["errors"][0]["intent_type"], "order_intent")
         json.dumps(result)
-        self.assertEqual(self.state_store.get_order_intent("open:ok")["status"], "filled")
-        self.assertEqual(self.state_store.get_order_intent("open:bad")["status"], "confirmed")
+        self.assertEqual(self.state_store.get_order_intent("open:ok")["status"], "position_opened")
+        self.assertEqual(self.state_store.get_order_intent("open:bad")["status"], "filled")
 
     def test_per_intent_close_error_records_and_continues(self) -> None:
-        self.create_close_intent("close:bad", quantity="bad")
-        self.create_close_intent("close:ok")
+        self.create_close_intent("close:bad", strategy_id="CLOSE_BAD", quantity="bad")
+        self.create_close_intent("close:ok", strategy_id="CLOSE_OK")
         result = self.run_job()
-        self.assertEqual(result["filled_close_intents_count"], 1)
+        self.assertEqual(result["positions_closed_count"], 1)
         self.assertEqual(result["errors_count"], 1)
         self.assertEqual(result["errors"][0]["intent_type"], "close_intent")
         json.dumps(result)
-        self.assertEqual(self.state_store.get_close_intent("close:ok")["status"], "filled")
-        self.assertEqual(self.state_store.get_close_intent("close:bad")["status"], "confirmed")
+        self.assertEqual(self.state_store.get_close_intent("close:ok")["status"], "position_closed")
+        self.assertEqual(self.state_store.get_close_intent("close:bad")["status"], "filled")
 
 
-class UnifiedSchedulerFillConfirmationRunOnceTests(Phase3UCase):
+class UnifiedSchedulerPositionTransitionRunOnceTests(Phase3VCase):
     def scheduler(self) -> UnifiedScheduler:
         return UnifiedScheduler(
             state_store=self.state_store,
@@ -415,21 +429,19 @@ class UnifiedSchedulerFillConfirmationRunOnceTests(Phase3UCase):
             readiness_manager=self.readiness_manager,
         )
 
-    def test_run_job_once_calls_fill_confirmation_wrapper_with_injected_kwargs(self) -> None:
+    def test_run_job_once_calls_position_wrapper_with_injected_kwargs(self) -> None:
         expected = {"dry_run": True, "sentinel": "ok"}
         wrapper = mock.Mock(return_value=expected)
-        adapter = DryRunExecutionAdapter()
         scheduler = self.scheduler()
         with mock.patch.dict(
             scheduler.run_job_once.__globals__,
-            {"run_intent_fill_confirmation_job": wrapper},
+            {"run_position_transitions_job": wrapper},
         ):
             result = scheduler.run_job_once(
-                JOB_INTENT_FILL_CONFIRMATION,
+                JOB_POSITION_TRANSITIONS,
                 state_store=self.state_store,
                 ledger=self.ledger,
                 now=NOW,
-                execution_adapter=adapter,
                 strategy_id=S01_VOL_BASELINE,
                 include_open_intents=False,
                 include_close_intents=True,
@@ -439,28 +451,27 @@ class UnifiedSchedulerFillConfirmationRunOnceTests(Phase3UCase):
             state_store=self.state_store,
             ledger=self.ledger,
             now=NOW,
-            execution_adapter=adapter,
             strategy_id=S01_VOL_BASELINE,
             include_open_intents=False,
             include_close_intents=True,
         )
 
-    def test_run_job_once_fills_confirmed_intents_and_unknown_job_unchanged(self) -> None:
+    def test_run_job_once_transitions_filled_intents_and_unknown_job_unchanged(self) -> None:
         self.create_order_intent("s01:open")
         result = self.scheduler().run_job_once(
-            JOB_INTENT_FILL_CONFIRMATION,
+            JOB_POSITION_TRANSITIONS,
             state_store=self.state_store,
             ledger=self.ledger,
             now=NOW,
         )
-        self.assertEqual(result["filled_order_intents_count"], 1)
+        self.assertEqual(result["positions_opened_count"], 1)
         with self.assertRaises(JobNotFoundError):
             self.scheduler().run_job_once("missing")
 
 
-class FillConfirmationSafetyAndRegressionTests(Phase3UCase):
+class PositionTransitionSafetyAndRegressionTests(Phase3VCase):
     def test_source_safety_scans(self) -> None:
-        source = Path("algo_trader_unified/jobs/fill_confirmation.py").read_text(encoding="utf-8")
+        source = Path("algo_trader_unified/jobs/position_transitions.py").read_text(encoding="utf-8")
         for forbidden in (
             "ib_insync",
             "yfinance",
@@ -469,27 +480,23 @@ class FillConfirmationSafetyAndRegressionTests(Phase3UCase):
             "placeOrder",
             "cancelOrder",
             "LedgerAppender.append",
-            "state_store.submit_order_intent",
-            "state_store.submit_close_intent",
-            "state_store.confirm_order_intent",
-            "state_store.confirm_close_order",
-            "state_store.fill_order_intent",
-            "state_store.fill_close_intent",
             "state_store.create_open_position",
             "state_store.close_position",
+            "state_store.mark_intent_position_opened",
+            "state_store.mark_close_intent_position_closed",
             ".jsonl",
             "submit_order_intent(",
             "submit_close_intent(",
             "confirm_order_intent(",
             "confirm_close_order(",
-            "open_position_from_filled_intent(",
-            "close_position_from_filled_intent(",
+            "confirm_fill(",
+            "confirm_close_fill(",
             "except:",
             ".start()",
         ):
             self.assertNotIn(forbidden, source)
-        self.assertIn("confirm_fill(", source)
-        self.assertIn("confirm_close_fill(", source)
+        self.assertIn("open_position_from_filled_intent(", source)
+        self.assertIn("close_position_from_filled_intent(", source)
 
     def test_lifecycle_path_regression_events_remain_single_step(self) -> None:
         self.set_readiness()
@@ -528,16 +535,6 @@ class FillConfirmationSafetyAndRegressionTests(Phase3UCase):
             confirmed_at="2026-05-04T14:01:00+00:00",
         )
         self.assertEqual(self.order_events()[-1]["event_type"], "ORDER_CONFIRMED")
-
-        before_confirm_job_events = len(self.order_events())
-        confirmation = run_intent_confirmation_job(
-            state_store=self.state_store,
-            ledger=self.ledger,
-            now="2026-05-04T14:01:30+00:00",
-        )
-        self.assertEqual(confirmation["confirmed_order_intents_count"], 0)
-        self.assertEqual(len(self.order_events()), before_confirm_job_events)
-
         confirm_fill(
             state_store=self.state_store,
             ledger=self.ledger,
@@ -546,6 +543,16 @@ class FillConfirmationSafetyAndRegressionTests(Phase3UCase):
             filled_at="2026-05-04T14:02:00+00:00",
         )
         self.assertEqual(self.order_events()[-1]["event_type"], "FILL_CONFIRMED")
+
+        before_fill_job_events = len(self.order_events())
+        fill_job = run_intent_fill_confirmation_job(
+            state_store=self.state_store,
+            ledger=self.ledger,
+            now="2026-05-04T14:02:30+00:00",
+        )
+        self.assertEqual(fill_job["filled_order_intents_count"], 0)
+        self.assertEqual(len(self.order_events()), before_fill_job_events)
+
         open_position_from_filled_intent(
             state_store=self.state_store,
             ledger=self.ledger,
@@ -595,35 +602,6 @@ class FillConfirmationSafetyAndRegressionTests(Phase3UCase):
         )
         self.assertEqual(self.execution_events()[-1]["event_type"], "POSITION_CLOSED")
 
-    def test_submission_confirmation_and_management_paths_stop_before_fills(self) -> None:
-        created_open = self.create_order_intent("created:open", status="created")
-        for field in ("submitted_at", "confirmed_at", "order_confirmed_event_id"):
-            created_open.pop(field, None)
-        self.state_store.state["order_intents"]["created:open"] = created_open
-        self.state_store.save()
-        submission = run_intent_submission_job(
-            state_store=self.state_store,
-            ledger=self.ledger,
-            now=NOW,
-        )
-        self.assertEqual(submission["submitted_order_intents_count"], 1)
-        confirmation = run_intent_confirmation_job(
-            state_store=self.state_store,
-            ledger=self.ledger,
-            now=NOW,
-        )
-        self.assertEqual(confirmation["confirmed_order_intents_count"], 1)
-
-        result = run_management_scan_job(
-            state_store=self.state_store,
-            ledger=self.ledger,
-            strategy_id="UNKNOWN",
-            now=NOW,
-        )
-        self.assertEqual(result["close_intents_created_count"], 0)
-        self.assertNotIn("FILL_CONFIRMED", {event["event_type"] for event in self.all_events()})
-        self.assertNotIn("CLOSE_FILL_CONFIRMED", {event["event_type"] for event in self.all_events()})
-
     def test_compile_and_runtime_safety_regressions(self) -> None:
         package_files = [
             path
@@ -640,5 +618,5 @@ class FillConfirmationSafetyAndRegressionTests(Phase3UCase):
         )
         self.assertNotIn("commodity_vrp", joined.lower())
 
-    def test_no_dry_run_parameter_added_to_fill_confirmation_job(self) -> None:
-        self.assertNotIn("dry_run", inspect.signature(run_intent_fill_confirmation_job).parameters)
+    def test_no_dry_run_parameter_added_to_position_transition_job(self) -> None:
+        self.assertNotIn("dry_run", inspect.signature(run_position_transitions_job).parameters)

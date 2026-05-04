@@ -27,6 +27,7 @@ JOB_S02_MANAGEMENT_SCAN = "s02_management_scan"
 JOB_INTENT_SUBMISSION = "intent_submission"
 JOB_INTENT_CONFIRMATION = "intent_confirmation"
 JOB_INTENT_FILL_CONFIRMATION = "intent_fill_confirmation"
+JOB_POSITION_TRANSITIONS = "position_transitions"
 
 
 @dataclass(frozen=True)
@@ -119,6 +120,13 @@ JOB_SPECS: dict[str, JobSpec] = {
         description="Dry-run confirmed intent fill confirmation",
         trigger_type="cron",
         trigger_kwargs={"day_of_week": "mon-fri", "hour": 16, "minute": 1},
+        enabled=True,
+    ),
+    JOB_POSITION_TRANSITIONS: JobSpec(
+        job_id=JOB_POSITION_TRANSITIONS,
+        description="Dry-run filled intent position transitions",
+        trigger_type="cron",
+        trigger_kwargs={"day_of_week": "mon-fri", "hour": 16, "minute": 2},
         enabled=True,
     ),
 }

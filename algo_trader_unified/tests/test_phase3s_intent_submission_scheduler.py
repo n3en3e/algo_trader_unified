@@ -15,6 +15,7 @@ from algo_trader_unified.config.scheduler import (
     JOB_INTENT_CONFIRMATION,
     JOB_INTENT_FILL_CONFIRMATION,
     JOB_INTENT_SUBMISSION,
+    JOB_POSITION_TRANSITIONS,
     JOB_SPECS,
 )
 from algo_trader_unified.core.close_intents import (
@@ -230,6 +231,7 @@ class SchedulerSubmissionConfigTests(unittest.TestCase):
             JOB_INTENT_SUBMISSION,
             JOB_INTENT_CONFIRMATION,
             JOB_INTENT_FILL_CONFIRMATION,
+            JOB_POSITION_TRANSITIONS,
         }
         self.assertEqual(added_jobs, set())
         for fragment in forbidden_fragments:

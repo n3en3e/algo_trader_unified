@@ -14,6 +14,7 @@ from algo_trader_unified.config.portfolio import S01_VOL_BASELINE, S02_VOL_ENHAN
 from algo_trader_unified.config.scheduler import (
     JOB_INTENT_CONFIRMATION,
     JOB_INTENT_FILL_CONFIRMATION,
+    JOB_POSITION_TRANSITIONS,
     JOB_SPECS,
 )
 from algo_trader_unified.core.close_intents import (
@@ -244,6 +245,7 @@ class SchedulerConfirmationConfigTests(unittest.TestCase):
             "intent_submission",
             JOB_INTENT_CONFIRMATION,
             JOB_INTENT_FILL_CONFIRMATION,
+            JOB_POSITION_TRANSITIONS,
         }
         self.assertEqual(added_jobs, set())
         for job_id in JOB_SPECS:
