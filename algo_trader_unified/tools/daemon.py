@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import signal
 import sys
 import threading
@@ -17,7 +18,10 @@ from algo_trader_unified.core.ledger import LedgerAppender
 from algo_trader_unified.core.readiness import ReadinessManager
 from algo_trader_unified.core.readiness_provider import DefaultHealthSnapshotProvider
 from algo_trader_unified.core.scheduler import UnifiedScheduler
-from algo_trader_unified.core.scheduler_cadence import run_bounded_dry_run_smoke
+from algo_trader_unified.core.scheduler_cadence import (
+    run_bounded_dry_run_smoke,
+    run_bounded_foreground_scheduler,
+)
 from algo_trader_unified.core.state_store import (
     CURRENT_SCHEMA_VERSION,
     StateStore,
@@ -78,6 +82,22 @@ class SmokeRunner(Protocol):
         snapshots_dir: Path,
         halt_state_path: Path,
         cycles: int,
+        include_lifecycle_pipeline: bool,
+    ) -> dict[str, Any]:
+        ...
+
+
+class ForegroundRunner(Protocol):
+    def __call__(
+        self,
+        *,
+        state_store: Any,
+        ledger: Any,
+        readiness_provider: Callable[[], Any],
+        snapshots_dir: Path,
+        halt_state_path: Path,
+        runtime_seconds: float,
+        enable_triggers: bool,
         include_lifecycle_pipeline: bool,
     ) -> dict[str, Any]:
         ...
@@ -177,19 +197,40 @@ def run_daemon(
     scheduler_factory: SchedulerFactory,
     readiness_provider_factory: ReadinessProviderFactory | None = None,
     smoke_runner: SmokeRunner = run_bounded_dry_run_smoke,
+    foreground_runner: ForegroundRunner = run_bounded_foreground_scheduler,
 ) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dry-run-only", action="store_true")
     parser.add_argument("--root", default=".")
     parser.add_argument("--smoke-cycles", type=int)
+    parser.add_argument("--foreground-runtime-seconds", type=float)
+    parser.add_argument("--enable-triggers", action="store_true")
     parser.add_argument("--enable-lifecycle-pipeline", action="store_true")
     args = parser.parse_args(argv)
 
     if not args.dry_run_only:
         print("ERROR: daemon mode requires --dry-run-only", file=sys.stderr)
         return 1
+    if args.smoke_cycles is not None and args.foreground_runtime_seconds is not None:
+        print(
+            "ERROR: choose either --smoke-cycles or --foreground-runtime-seconds",
+            file=sys.stderr,
+        )
+        return 1
     if args.smoke_cycles is not None and args.smoke_cycles <= 0:
         print("ERROR: --smoke-cycles must be a positive finite integer", file=sys.stderr)
+        return 1
+    if (
+        args.foreground_runtime_seconds is not None
+        and (
+            args.foreground_runtime_seconds <= 0
+            or not math.isfinite(args.foreground_runtime_seconds)
+        )
+    ):
+        print(
+            "ERROR: --foreground-runtime-seconds must be a positive finite number",
+            file=sys.stderr,
+        )
         return 1
 
     root = Path(args.root)
@@ -234,6 +275,26 @@ def run_daemon(
             snapshots_dir=snapshots_dir,
             halt_state_path=halt_state_path,
             cycles=args.smoke_cycles,
+            include_lifecycle_pipeline=args.enable_lifecycle_pipeline,
+        )
+        print(json.dumps(summary, sort_keys=True))
+        return 0 if summary.get("success") is True else 1
+
+    if args.foreground_runtime_seconds is not None:
+        provider_factory = readiness_provider_factory or build_readiness_provider
+        readiness_provider = provider_factory(
+            state_store=state_store,
+            snapshots_dir=snapshots_dir,
+            halt_state_path=halt_state_path,
+        )
+        summary = foreground_runner(
+            state_store=state_store,
+            ledger=ledger,
+            readiness_provider=readiness_provider,
+            snapshots_dir=snapshots_dir,
+            halt_state_path=halt_state_path,
+            runtime_seconds=args.foreground_runtime_seconds,
+            enable_triggers=args.enable_triggers,
             include_lifecycle_pipeline=args.enable_lifecycle_pipeline,
         )
         print(json.dumps(summary, sort_keys=True))

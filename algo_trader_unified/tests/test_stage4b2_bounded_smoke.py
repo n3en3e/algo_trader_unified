@@ -188,7 +188,6 @@ class BoundedSmokeRunnerTests(SmokeCase):
             "core.broker",
             "systemd",
             "BlockingScheduler",
-            ".start()",
         )
         for token in forbidden:
             self.assertNotIn(token, source)

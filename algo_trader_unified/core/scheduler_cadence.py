@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import math
+import time
 from dataclasses import asdict, is_dataclass
 from datetime import date
 from datetime import datetime, timezone
@@ -253,6 +255,98 @@ def run_bounded_dry_run_smoke(
     }
 
 
+def run_bounded_foreground_scheduler(
+    *,
+    state_store,
+    ledger,
+    readiness_provider,
+    snapshots_dir,
+    halt_state_path,
+    runtime_seconds: float,
+    enable_triggers: bool,
+    include_lifecycle_pipeline: bool,
+    scheduler_factory: Callable[[], Any] | None = None,
+    now_provider: Callable[[], datetime] | None = None,
+    sleep_fn: Callable[[float], None] | None = None,
+    monotonic_fn: Callable[[], float] | None = None,
+) -> dict[str, Any]:
+    if runtime_seconds <= 0 or not math.isfinite(runtime_seconds):
+        raise ValueError("foreground runtime seconds must be a positive finite number")
+
+    scheduler = build_scheduler(
+        enable_triggers=enable_triggers,
+        enable_lifecycle_pipeline=include_lifecycle_pipeline,
+        state_store=state_store,
+        ledger=ledger,
+        readiness_provider=readiness_provider,
+        snapshots_dir=snapshots_dir,
+        halt_state_path=halt_state_path,
+        scheduler_factory=scheduler_factory,
+        now_provider=now_provider,
+    )
+    jobs_registered = _registered_job_ids(scheduler)
+    nap = sleep_fn or time.sleep
+    clock = monotonic_fn or time.monotonic
+    errors: list[dict[str, Any]] = []
+    scheduler_started = False
+    scheduler_shutdown = False
+    interrupted = False
+    start_time = clock()
+    elapsed = 0.0
+
+    try:
+        scheduler.start()
+        scheduler_started = True
+        deadline = start_time + runtime_seconds
+        while True:
+            elapsed = max(0.0, clock() - start_time)
+            remaining = deadline - clock()
+            if remaining <= 0:
+                break
+            nap(min(remaining, 0.25))
+    except KeyboardInterrupt:
+        interrupted = True
+        elapsed = max(0.0, clock() - start_time)
+    except Exception as exc:
+        elapsed = max(0.0, clock() - start_time)
+        errors.append(
+            {
+                "phase": "start" if not scheduler_started else "runtime",
+                "error_type": type(exc).__name__,
+                "message": str(exc),
+            }
+        )
+    finally:
+        if scheduler_started:
+            try:
+                scheduler.shutdown(wait=True)
+                scheduler_shutdown = True
+            except Exception as exc:
+                scheduler_shutdown = False
+                errors.append(
+                    {
+                        "phase": "shutdown",
+                        "error_type": type(exc).__name__,
+                        "message": str(exc),
+                    }
+                )
+
+    return {
+        "dry_run": True,
+        "foreground_run": True,
+        "runtime_seconds_requested": runtime_seconds,
+        "elapsed_seconds": elapsed,
+        "enable_triggers": enable_triggers,
+        "include_lifecycle_pipeline": include_lifecycle_pipeline,
+        "scheduler_started": scheduler_started,
+        "scheduler_shutdown": scheduler_shutdown,
+        "jobs_registered": jobs_registered,
+        "interrupted": interrupted,
+        "errors": errors,
+        "success": not errors and scheduler_started and scheduler_shutdown,
+    }
+
+
 def run_keepalive() -> dict[str, str]:
     return {"status": "alive"}
 
@@ -462,6 +556,16 @@ class _SmokeScheduler:
 
     def add_job(self, func, **kwargs) -> None:
         self.jobs.append({"func": func, **kwargs})
+
+
+def _registered_job_ids(scheduler: Any) -> list[str]:
+    jobs = getattr(scheduler, "jobs", None)
+    if isinstance(jobs, list):
+        return [str(job["id"]) for job in jobs if isinstance(job, dict) and "id" in job]
+    get_jobs = getattr(scheduler, "get_jobs", None)
+    if callable(get_jobs):
+        return [str(getattr(job, "id")) for job in get_jobs()]
+    return []
 
 
 def _json_safe(value: Any) -> Any:
