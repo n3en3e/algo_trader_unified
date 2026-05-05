@@ -86,9 +86,11 @@ class TmpCase(unittest.TestCase):
 
 class SchedulerConfigTests(unittest.TestCase):
     def test_scheduler_defaults_and_disabled_stubs(self) -> None:
-        for spec in JOB_SPECS.values():
+        for job_id, spec in JOB_SPECS.items():
             self.assertEqual(spec.max_instances, DEFAULT_MAX_INSTANCES)
-            self.assertEqual(spec.coalesce, DEFAULT_COALESCE)
+            if job_id != JOB_DAILY_DIGEST:
+                self.assertEqual(spec.coalesce, DEFAULT_COALESCE)
+        self.assertFalse(JOB_SPECS[JOB_DAILY_DIGEST].coalesce)
         self.assertTrue(JOB_SPECS[JOB_S01_VOL_SCAN].enabled)
         self.assertTrue(JOB_SPECS[JOB_S02_VOL_SCAN].enabled)
         self.assertTrue(JOB_SPECS[JOB_S01_MANAGEMENT_SCAN].enabled)

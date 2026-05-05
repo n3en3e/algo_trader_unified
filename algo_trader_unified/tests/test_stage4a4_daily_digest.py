@@ -12,6 +12,7 @@ from zoneinfo import ZoneInfo
 
 from algo_trader_unified.config.portfolio import S01_VOL_BASELINE, S02_VOL_ENHANCED
 from algo_trader_unified.config.scheduler import JOB_DAILY_DIGEST
+from algo_trader_unified.config.scheduler import JOB_SPECS, SCHEDULER_TIMEZONE
 from algo_trader_unified.core.ledger import KNOWN_EVENT_TYPES
 from algo_trader_unified.jobs.daily_digest import (
     UNKNOWN_SKIP_REASON,
@@ -162,6 +163,18 @@ class DigestContentTests(unittest.TestCase):
         )
         self.assertEqual(content.signals_generated_count, 1)
 
+    def test_dst_transition_uses_zoneinfo_conversion(self) -> None:
+        content = build_digest_content(
+            events=[
+                event("SIGNAL_GENERATED", "2026-03-08T04:30:00+00:00", event_id="before_dst_day"),
+                event("SIGNAL_GENERATED", "2026-03-08T06:30:00+00:00", event_id="dst_day"),
+            ],
+            state_snapshot=base_state_snapshot(),
+            session_date=date(2026, 3, 8),
+            strategy_ids=[S01_VOL_BASELINE, S02_VOL_ENHANCED],
+        )
+        self.assertEqual(content.signals_generated_count, 1)
+
     def test_missing_and_malformed_timestamps_count_without_crashing(self) -> None:
         malformed = event("SIGNAL_GENERATED", "not-a-time", event_id="bad")
         missing = event("SIGNAL_GENERATED", "", event_id="missing")
@@ -277,6 +290,20 @@ class DigestWriteTests(unittest.TestCase):
                 )
             self.assertIn("WARNING", stderr.getvalue())
 
+    def test_file_write_errors_are_not_swallowed_as_telegram_failures(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            snapshots_path = Path(tmp) / "data/snapshots"
+            snapshots_path.parent.mkdir(parents=True)
+            snapshots_path.write_text("not a directory", encoding="utf-8")
+            with self.assertRaises(FileExistsError):
+                with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                    write_digest(
+                        content=self.content(),
+                        snapshots_dir=snapshots_path,
+                        telegram_sender=None,
+                        now=datetime(2026, 5, 5, 17, 0, tzinfo=NY),
+                    )
+
 
 class DigestIntegrationTests(unittest.TestCase):
     def test_run_daily_digest_reads_local_inputs_without_mutating_state_or_ledger(self) -> None:
@@ -339,6 +366,19 @@ class DigestIntegrationTests(unittest.TestCase):
         self.assertIn("run_daily_digest_job", source)
         self.assertIn("JOB_DAILY_DIGEST", source)
         self.assertEqual(JOB_DAILY_DIGEST, "daily_digest")
+        spec = JOB_SPECS[JOB_DAILY_DIGEST]
+        self.assertEqual(spec.trigger_type, "cron")
+        self.assertEqual(
+            spec.trigger_kwargs,
+            {
+                "day_of_week": "mon-fri",
+                "hour": 17,
+                "minute": 0,
+                "timezone": SCHEDULER_TIMEZONE,
+            },
+        )
+        self.assertEqual(spec.max_instances, 1)
+        self.assertFalse(spec.coalesce)
 
     def test_digest_source_has_no_broker_systemd_or_pipeline_imports(self) -> None:
         source = Path("algo_trader_unified/jobs/daily_digest.py").read_text(encoding="utf-8")

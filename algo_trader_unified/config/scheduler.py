@@ -68,7 +68,13 @@ JOB_SPECS: dict[str, JobSpec] = {
         job_id=JOB_DAILY_DIGEST,
         description="Dry-run daily digest wrapper",
         trigger_type="cron",
-        trigger_kwargs={"day_of_week": "mon-fri", "hour": 16, "minute": 20},
+        trigger_kwargs={
+            "day_of_week": "mon-fri",
+            "hour": 17,
+            "minute": 0,
+            "timezone": SCHEDULER_TIMEZONE,
+        },
+        coalesce=False,
     ),
     JOB_WEEKLY_DIGEST: JobSpec(
         job_id=JOB_WEEKLY_DIGEST,
