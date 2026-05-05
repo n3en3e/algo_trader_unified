@@ -25,6 +25,7 @@ from algo_trader_unified.core.skip_reasons import (
     SKIP_READINESS_NOT_EVALUATED,
     SKIP_STATESTORE_UNREADABLE,
 )
+from algo_trader_unified.jobs.daily_digest import run_daily_digest
 from algo_trader_unified.jobs.readiness import market_open_scan
 
 
@@ -136,7 +137,12 @@ def build_scheduler(
     _add_cron_job(
         scheduler,
         JOB_DAILY_DIGEST,
-        lambda: run_daily_digest_stub(),
+        lambda: run_daily_digest_job(
+            state_store=state_store,
+            ledger=ledger,
+            snapshots_dir=snapshots_path,
+            halt_state_path=halt_path,
+        ),
         hour=17,
         minute=0,
         coalesce=False,
@@ -255,9 +261,24 @@ def run_eod_review() -> dict[str, str]:
     return {"status": "placeholder"}
 
 
-def run_daily_digest_stub() -> dict[str, str]:
-    print("Daily digest placeholder")
-    return {"status": "placeholder"}
+def run_daily_digest_job(
+    *,
+    state_store,
+    ledger,
+    snapshots_dir: Path,
+    halt_state_path: Path,
+    telegram_sender=None,
+    now: datetime | None = None,
+):
+    return run_daily_digest(
+        state_store=state_store,
+        ledger=ledger,
+        snapshots_dir=snapshots_dir,
+        halt_state_path=halt_state_path,
+        telegram_sender=telegram_sender,
+        now=now,
+        strategy_ids=[S01_VOL_BASELINE, S02_VOL_ENHANCED],
+    )
 
 
 def _new_scheduler(scheduler_factory: Callable[[], Any] | None):
