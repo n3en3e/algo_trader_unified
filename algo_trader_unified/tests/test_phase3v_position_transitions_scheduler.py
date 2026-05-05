@@ -235,6 +235,10 @@ class SchedulerPositionTransitionConfigTests(unittest.TestCase):
             "intent_confirmation",
             "intent_fill_confirmation",
             JOB_POSITION_TRANSITIONS,
+            "dry_run_submit_pending_intents",
+            "dry_run_confirm_submitted_orders",
+            "dry_run_confirm_fills",
+            "dry_run_apply_position_transitions",
         }
         self.assertEqual(added_jobs, set())
 

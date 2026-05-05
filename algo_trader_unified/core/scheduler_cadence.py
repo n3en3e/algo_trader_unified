@@ -10,6 +10,10 @@ from typing import Any, Callable
 from algo_trader_unified.config.portfolio import S01_VOL_BASELINE, S02_VOL_ENHANCED
 from algo_trader_unified.config.scheduler import (
     JOB_DAILY_DIGEST,
+    JOB_DRY_RUN_APPLY_POSITION_TRANSITIONS,
+    JOB_DRY_RUN_CONFIRM_FILLS,
+    JOB_DRY_RUN_CONFIRM_SUBMITTED_ORDERS,
+    JOB_DRY_RUN_SUBMIT_PENDING_INTENTS,
     JOB_EOD_REVIEW,
     JOB_HEARTBEAT,
     JOB_KEEPALIVE,
@@ -25,8 +29,12 @@ from algo_trader_unified.core.skip_reasons import (
     SKIP_READINESS_NOT_EVALUATED,
     SKIP_STATESTORE_UNREADABLE,
 )
+from algo_trader_unified.jobs.confirmation import run_intent_confirmation_job
 from algo_trader_unified.jobs.daily_digest import run_daily_digest
+from algo_trader_unified.jobs.fill_confirmation import run_intent_fill_confirmation_job
+from algo_trader_unified.jobs.position_transitions import run_position_transitions_job
 from algo_trader_unified.jobs.readiness import market_open_scan
+from algo_trader_unified.jobs.submission import run_intent_submission_job
 
 
 STAGE4A_JOB_IDS = (
@@ -40,6 +48,13 @@ STAGE4A_JOB_IDS = (
     JOB_DAILY_DIGEST,
 )
 
+STAGE4B_LIFECYCLE_JOB_IDS = (
+    JOB_DRY_RUN_SUBMIT_PENDING_INTENTS,
+    JOB_DRY_RUN_CONFIRM_SUBMITTED_ORDERS,
+    JOB_DRY_RUN_CONFIRM_FILLS,
+    JOB_DRY_RUN_APPLY_POSITION_TRANSITIONS,
+)
+
 _ACTIVE_INTENT_STATUSES = {"created", "submitted", "confirmed", "filled"}
 _LOCAL_SNAPSHOT_MAX_STALENESS_MINUTES = 15
 _SNAPSHOT_TIMESTAMP_FIELDS = ("timestamp", "captured_at", "snapshot_at", "generated_at")
@@ -48,6 +63,7 @@ _SNAPSHOT_TIMESTAMP_FIELDS = ("timestamp", "captured_at", "snapshot_at", "genera
 def build_scheduler(
     *,
     enable_triggers: bool,
+    enable_lifecycle_pipeline: bool = False,
     state_store,
     ledger,
     readiness_provider,
@@ -147,6 +163,12 @@ def build_scheduler(
         minute=0,
         coalesce=False,
     )
+    if enable_lifecycle_pipeline:
+        _add_stage4b_lifecycle_jobs(
+            scheduler=scheduler,
+            state_store=state_store,
+            ledger=ledger,
+        )
     return scheduler
 
 
@@ -279,6 +301,53 @@ def run_daily_digest_job(
         now=now,
         strategy_ids=[S01_VOL_BASELINE, S02_VOL_ENHANCED],
     )
+
+
+def _add_stage4b_lifecycle_jobs(*, scheduler, state_store, ledger) -> None:
+    _add_interval_job(
+        scheduler,
+        JOB_DRY_RUN_SUBMIT_PENDING_INTENTS,
+        lambda: run_intent_submission_job(
+            state_store=state_store,
+            ledger=ledger,
+            now=_scheduler_now(),
+        ),
+        seconds=60,
+    )
+    _add_interval_job(
+        scheduler,
+        JOB_DRY_RUN_CONFIRM_SUBMITTED_ORDERS,
+        lambda: run_intent_confirmation_job(
+            state_store=state_store,
+            ledger=ledger,
+            now=_scheduler_now(),
+        ),
+        seconds=60,
+    )
+    _add_interval_job(
+        scheduler,
+        JOB_DRY_RUN_CONFIRM_FILLS,
+        lambda: run_intent_fill_confirmation_job(
+            state_store=state_store,
+            ledger=ledger,
+            now=_scheduler_now(),
+        ),
+        seconds=60,
+    )
+    _add_interval_job(
+        scheduler,
+        JOB_DRY_RUN_APPLY_POSITION_TRANSITIONS,
+        lambda: run_position_transitions_job(
+            state_store=state_store,
+            ledger=ledger,
+            now=_scheduler_now(),
+        ),
+        seconds=60,
+    )
+
+
+def _scheduler_now() -> str:
+    return datetime.now(timezone.utc).isoformat()
 
 
 def _new_scheduler(scheduler_factory: Callable[[], Any] | None):

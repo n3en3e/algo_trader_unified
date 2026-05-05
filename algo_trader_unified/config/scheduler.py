@@ -31,6 +31,10 @@ JOB_INTENT_SUBMISSION = "intent_submission"
 JOB_INTENT_CONFIRMATION = "intent_confirmation"
 JOB_INTENT_FILL_CONFIRMATION = "intent_fill_confirmation"
 JOB_POSITION_TRANSITIONS = "position_transitions"
+JOB_DRY_RUN_SUBMIT_PENDING_INTENTS = "dry_run_submit_pending_intents"
+JOB_DRY_RUN_CONFIRM_SUBMITTED_ORDERS = "dry_run_confirm_submitted_orders"
+JOB_DRY_RUN_CONFIRM_FILLS = "dry_run_confirm_fills"
+JOB_DRY_RUN_APPLY_POSITION_TRANSITIONS = "dry_run_apply_position_transitions"
 
 
 @dataclass(frozen=True)
@@ -137,5 +141,33 @@ JOB_SPECS: dict[str, JobSpec] = {
         trigger_type="cron",
         trigger_kwargs={"day_of_week": "mon-fri", "hour": 16, "minute": 2},
         enabled=True,
+    ),
+    JOB_DRY_RUN_SUBMIT_PENDING_INTENTS: JobSpec(
+        job_id=JOB_DRY_RUN_SUBMIT_PENDING_INTENTS,
+        description="Disabled dry-run pending intent submission cadence",
+        trigger_type="interval",
+        trigger_kwargs={"seconds": 60},
+        enabled=False,
+    ),
+    JOB_DRY_RUN_CONFIRM_SUBMITTED_ORDERS: JobSpec(
+        job_id=JOB_DRY_RUN_CONFIRM_SUBMITTED_ORDERS,
+        description="Disabled dry-run submitted order confirmation cadence",
+        trigger_type="interval",
+        trigger_kwargs={"seconds": 60},
+        enabled=False,
+    ),
+    JOB_DRY_RUN_CONFIRM_FILLS: JobSpec(
+        job_id=JOB_DRY_RUN_CONFIRM_FILLS,
+        description="Disabled dry-run fill confirmation cadence",
+        trigger_type="interval",
+        trigger_kwargs={"seconds": 60},
+        enabled=False,
+    ),
+    JOB_DRY_RUN_APPLY_POSITION_TRANSITIONS: JobSpec(
+        job_id=JOB_DRY_RUN_APPLY_POSITION_TRANSITIONS,
+        description="Disabled dry-run position transition cadence",
+        trigger_type="interval",
+        trigger_kwargs={"seconds": 60},
+        enabled=False,
     ),
 }

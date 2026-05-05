@@ -8,11 +8,16 @@ import unittest
 from contextlib import redirect_stdout
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
+from unittest import mock
 from pathlib import Path
 
 from algo_trader_unified.config.portfolio import S01_VOL_BASELINE, S02_VOL_ENHANCED
 from algo_trader_unified.config.scheduler import (
     JOB_DAILY_DIGEST,
+    JOB_DRY_RUN_APPLY_POSITION_TRANSITIONS,
+    JOB_DRY_RUN_CONFIRM_FILLS,
+    JOB_DRY_RUN_CONFIRM_SUBMITTED_ORDERS,
+    JOB_DRY_RUN_SUBMIT_PENDING_INTENTS,
     JOB_EOD_REVIEW,
     JOB_HEARTBEAT,
     JOB_INTENT_CONFIRMATION,
@@ -24,6 +29,7 @@ from algo_trader_unified.config.scheduler import (
     JOB_RISK_MONITOR,
     JOB_S01_VOL_SCAN,
     JOB_S02_VOL_SCAN,
+    JOB_SPECS,
     SCHEDULER_TIMEZONE,
 )
 from algo_trader_unified.config.variants import S01_CONFIG
@@ -76,11 +82,23 @@ class FakeStateStore:
             return positions
         return [position for position in positions if position.get("status") == status]
 
-    def list_order_intents(self):
-        return list(self.state["order_intents"].values())
+    def list_order_intents(self, strategy_id=None):
+        records = list(self.state["order_intents"].values())
+        if strategy_id is None:
+            return records
+        return [record for record in records if record.get("strategy_id") == strategy_id]
 
-    def list_close_intents(self):
-        return list(self.state["close_intents"].values())
+    def list_close_intents(self, strategy_id=None):
+        records = list(self.state["close_intents"].values())
+        if strategy_id is None:
+            return records
+        return [record for record in records if record.get("strategy_id") == strategy_id]
+
+    def get_order_intent(self, intent_id):
+        return self.state["order_intents"].get(intent_id)
+
+    def get_close_intent(self, close_intent_id):
+        return self.state["close_intents"].get(close_intent_id)
 
     def get_readiness(self, strategy_id):
         return self.readiness.get(strategy_id)
@@ -110,9 +128,10 @@ class SchedulerCadenceCase(unittest.TestCase):
     def tearDown(self) -> None:
         self.tmp.cleanup()
 
-    def build(self, *, enable_triggers=True):
+    def build(self, *, enable_triggers=True, enable_lifecycle_pipeline=False):
         return scheduler_cadence.build_scheduler(
             enable_triggers=enable_triggers,
+            enable_lifecycle_pipeline=enable_lifecycle_pipeline,
             state_store=self.state_store,
             ledger=self.ledger,
             readiness_provider=lambda: None,
@@ -127,6 +146,7 @@ class BuilderSignatureAndRegistrationTests(SchedulerCadenceCase):
         params = inspect.signature(scheduler_cadence.build_scheduler).parameters
         for name in (
             "enable_triggers",
+            "enable_lifecycle_pipeline",
             "state_store",
             "ledger",
             "readiness_provider",
@@ -137,12 +157,17 @@ class BuilderSignatureAndRegistrationTests(SchedulerCadenceCase):
             self.assertIn(name, params)
 
     def test_enable_triggers_false_registers_zero_jobs(self) -> None:
-        scheduler = self.build(enable_triggers=False)
-        self.assertIs(scheduler, self.scheduler)
-        self.assertEqual(self.scheduler.jobs, [])
+        for enable_lifecycle_pipeline in (False, True):
+            self.scheduler.jobs = []
+            scheduler = self.build(
+                enable_triggers=False,
+                enable_lifecycle_pipeline=enable_lifecycle_pipeline,
+            )
+            self.assertIs(scheduler, self.scheduler)
+            self.assertEqual(self.scheduler.jobs, [])
 
     def test_enable_triggers_true_registers_exact_stage4a_jobs(self) -> None:
-        self.build(enable_triggers=True)
+        self.build(enable_triggers=True, enable_lifecycle_pipeline=False)
         self.assertEqual(
             [job["id"] for job in self.scheduler.jobs],
             [
@@ -164,14 +189,44 @@ class BuilderSignatureAndRegistrationTests(SchedulerCadenceCase):
         }
         self.assertFalse(forbidden & {job["id"] for job in self.scheduler.jobs})
 
+    def test_enable_lifecycle_pipeline_registers_stage4a_plus_stage4b_jobs(self) -> None:
+        self.build(enable_triggers=True, enable_lifecycle_pipeline=True)
+        self.assertEqual(
+            [job["id"] for job in self.scheduler.jobs],
+            [
+                JOB_KEEPALIVE,
+                JOB_RISK_MONITOR,
+                JOB_HEARTBEAT,
+                JOB_MARKET_OPEN_SCAN,
+                JOB_S01_VOL_SCAN,
+                JOB_S02_VOL_SCAN,
+                JOB_EOD_REVIEW,
+                JOB_DAILY_DIGEST,
+                JOB_DRY_RUN_SUBMIT_PENDING_INTENTS,
+                JOB_DRY_RUN_CONFIRM_SUBMITTED_ORDERS,
+                JOB_DRY_RUN_CONFIRM_FILLS,
+                JOB_DRY_RUN_APPLY_POSITION_TRANSITIONS,
+            ],
+        )
+
     def test_interval_jobs_have_expected_cadence_and_options(self) -> None:
-        self.build()
+        self.build(enable_lifecycle_pipeline=True)
         by_id = {job["id"]: job for job in self.scheduler.jobs}
         self.assertEqual(by_id[JOB_KEEPALIVE]["trigger"], "interval")
         self.assertEqual(by_id[JOB_KEEPALIVE]["seconds"], 60)
         self.assertEqual(by_id[JOB_RISK_MONITOR]["minutes"], 5)
         self.assertEqual(by_id[JOB_HEARTBEAT]["minutes"], 5)
         for job_id in (JOB_KEEPALIVE, JOB_RISK_MONITOR, JOB_HEARTBEAT):
+            self.assertEqual(by_id[job_id]["max_instances"], 1)
+            self.assertTrue(by_id[job_id]["coalesce"])
+        for job_id in (
+            JOB_DRY_RUN_SUBMIT_PENDING_INTENTS,
+            JOB_DRY_RUN_CONFIRM_SUBMITTED_ORDERS,
+            JOB_DRY_RUN_CONFIRM_FILLS,
+            JOB_DRY_RUN_APPLY_POSITION_TRANSITIONS,
+        ):
+            self.assertEqual(by_id[job_id]["trigger"], "interval")
+            self.assertEqual(by_id[job_id]["seconds"], 60)
             self.assertEqual(by_id[job_id]["max_instances"], 1)
             self.assertTrue(by_id[job_id]["coalesce"])
 
@@ -194,6 +249,63 @@ class BuilderSignatureAndRegistrationTests(SchedulerCadenceCase):
             self.assertEqual(job["timezone"], SCHEDULER_TIMEZONE)
             self.assertEqual(job["max_instances"], 1)
             self.assertEqual(job["coalesce"], coalesce)
+
+    def test_lifecycle_scheduled_callables_map_to_existing_stage3_wrappers(self) -> None:
+        self.build(enable_lifecycle_pipeline=True)
+        by_id = {job["id"]: job for job in self.scheduler.jobs}
+        expected_by_id = {
+            JOB_DRY_RUN_SUBMIT_PENDING_INTENTS: "run_intent_submission_job",
+            JOB_DRY_RUN_CONFIRM_SUBMITTED_ORDERS: "run_intent_confirmation_job",
+            JOB_DRY_RUN_CONFIRM_FILLS: "run_intent_fill_confirmation_job",
+            JOB_DRY_RUN_APPLY_POSITION_TRANSITIONS: "run_position_transitions_job",
+        }
+        for job_id, wrapper_name in expected_by_id.items():
+            wrapper = mock.Mock(return_value={"dry_run": True, "job_id": job_id})
+            with mock.patch.object(scheduler_cadence, wrapper_name, wrapper):
+                result = by_id[job_id]["func"]()
+            self.assertEqual(result, {"dry_run": True, "job_id": job_id})
+            wrapper.assert_called_once()
+            kwargs = wrapper.call_args.kwargs
+            self.assertIs(kwargs["state_store"], self.state_store)
+            self.assertIs(kwargs["ledger"], self.ledger)
+            self.assertIsInstance(kwargs["now"], str)
+
+    def test_lifecycle_scheduled_callables_noop_safely_and_return_json_safe_dicts(self) -> None:
+        self.state_store.state["order_intents"] = {
+            "intent_1": {"intent_id": "intent_1", "status": "cancelled"}
+        }
+        self.state_store.state["close_intents"] = {
+            "close_1": {"close_intent_id": "close_1", "status": "cancelled"}
+        }
+        before = deepcopy(self.state_store.state)
+        self.build(enable_lifecycle_pipeline=True)
+        lifecycle_ids = (
+            JOB_DRY_RUN_CONFIRM_FILLS,
+            JOB_DRY_RUN_APPLY_POSITION_TRANSITIONS,
+            JOB_DRY_RUN_CONFIRM_SUBMITTED_ORDERS,
+            JOB_DRY_RUN_SUBMIT_PENDING_INTENTS,
+        )
+        by_id = {job["id"]: job for job in self.scheduler.jobs}
+        for job_id in lifecycle_ids:
+            result = by_id[job_id]["func"]()
+            self.assertIs(result["dry_run"], True)
+            json.dumps(result)
+        self.assertEqual(self.state_store.state, before)
+        self.assertEqual(self.ledger.events, [])
+
+    def test_lifecycle_pipeline_job_specs_are_disabled_by_default(self) -> None:
+        for job_id in (
+            JOB_DRY_RUN_SUBMIT_PENDING_INTENTS,
+            JOB_DRY_RUN_CONFIRM_SUBMITTED_ORDERS,
+            JOB_DRY_RUN_CONFIRM_FILLS,
+            JOB_DRY_RUN_APPLY_POSITION_TRANSITIONS,
+        ):
+            spec = JOB_SPECS[job_id]
+            self.assertFalse(spec.enabled)
+            self.assertEqual(spec.trigger_type, "interval")
+            self.assertEqual(spec.trigger_kwargs, {"seconds": 60})
+            self.assertEqual(spec.max_instances, 1)
+            self.assertTrue(spec.coalesce)
 
 
 class LocalJobBehaviorTests(SchedulerCadenceCase):
@@ -321,7 +433,7 @@ class VolScanSafetyTests(SchedulerCadenceCase):
 
 
 class BrokerBoundaryTests(unittest.TestCase):
-    def test_stage4a3_source_has_no_broker_systemd_or_pipeline_cadence_imports(self) -> None:
+    def test_stage4b1_source_has_no_broker_systemd_or_live_scheduler_imports(self) -> None:
         source = Path("algo_trader_unified/core/scheduler_cadence.py").read_text(
             encoding="utf-8"
         )
@@ -332,10 +444,7 @@ class BrokerBoundaryTests(unittest.TestCase):
             "core.broker",
             "systemd",
             "jobs.vol",
-            "run_intent_submission_job",
-            "run_intent_confirmation_job",
-            "run_intent_fill_confirmation_job",
-            "run_position_transitions_job",
+            "BackgroundScheduler.start",
         )
         for token in forbidden:
             self.assertNotIn(token, source)

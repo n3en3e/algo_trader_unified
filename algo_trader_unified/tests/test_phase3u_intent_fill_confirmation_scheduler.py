@@ -247,6 +247,10 @@ class SchedulerFillConfirmationConfigTests(unittest.TestCase):
             "intent_confirmation",
             JOB_INTENT_FILL_CONFIRMATION,
             JOB_POSITION_TRANSITIONS,
+            "dry_run_submit_pending_intents",
+            "dry_run_confirm_submitted_orders",
+            "dry_run_confirm_fills",
+            "dry_run_apply_position_transitions",
         }
         self.assertEqual(added_jobs, set())
         for job_id in JOB_SPECS:
