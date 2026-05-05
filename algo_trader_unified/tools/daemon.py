@@ -14,10 +14,14 @@ from typing import Any, Callable, Protocol
 
 from algo_trader_unified.config.scheduler import SCHEDULER_SHUTDOWN_TIMEOUT_SEC
 from algo_trader_unified.config.portfolio import S01_VOL_BASELINE, S02_VOL_ENHANCED
+from algo_trader_unified.core.acceptance_report import build_dry_run_acceptance_report
+from algo_trader_unified.core.halt_state_utils import halt_is_active
 from algo_trader_unified.core.ledger import LedgerAppender
+from algo_trader_unified.core.ledger_reader import LedgerReader
 from algo_trader_unified.core.readiness import ReadinessManager
 from algo_trader_unified.core.readiness_provider import DefaultHealthSnapshotProvider
 from algo_trader_unified.core.scheduler import UnifiedScheduler
+from algo_trader_unified.core.scheduler_cadence import build_scheduler as build_cadence_scheduler
 from algo_trader_unified.core.scheduler_cadence import (
     run_bounded_dry_run_smoke,
     run_bounded_foreground_scheduler,
@@ -103,6 +107,20 @@ class ForegroundRunner(Protocol):
         ...
 
 
+class AcceptanceReportBuilder(Protocol):
+    def __call__(
+        self,
+        *,
+        state_store: Any,
+        ledger_reader: Any,
+        readiness_provider: Callable[[], Any],
+        snapshots_dir: Path,
+        halt_state_path: Path,
+        scheduler_builder: Callable[..., Any],
+    ) -> dict[str, Any]:
+        ...
+
+
 class StartupDiagnosticProvider:
     """Local-only startup checks for dry-run daemon mode."""
 
@@ -121,7 +139,7 @@ class StartupDiagnosticProvider:
                 f"StateStore schema_version mismatch: found {found!r}, expected {CURRENT_SCHEMA_VERSION!r}",
             )
         state_halt = state.get("halt_state")
-        if _halt_is_active(self.halt_state) != _halt_is_active(state_halt):
+        if halt_is_active(self.halt_state) != halt_is_active(state_halt):
             return DiagnosticResult(
                 False,
                 "halt_state.json conflicts with StateStore halt_state",
@@ -198,6 +216,8 @@ def run_daemon(
     readiness_provider_factory: ReadinessProviderFactory | None = None,
     smoke_runner: SmokeRunner = run_bounded_dry_run_smoke,
     foreground_runner: ForegroundRunner = run_bounded_foreground_scheduler,
+    acceptance_report_builder: AcceptanceReportBuilder = build_dry_run_acceptance_report,
+    ledger_reader_factory: Callable[[Path], Any] = LedgerReader.from_root,
 ) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dry-run-only", action="store_true")
@@ -206,10 +226,19 @@ def run_daemon(
     parser.add_argument("--foreground-runtime-seconds", type=float)
     parser.add_argument("--enable-triggers", action="store_true")
     parser.add_argument("--enable-lifecycle-pipeline", action="store_true")
+    parser.add_argument("--acceptance-report", action="store_true")
     args = parser.parse_args(argv)
 
     if not args.dry_run_only:
         print("ERROR: daemon mode requires --dry-run-only", file=sys.stderr)
+        return 1
+    if args.acceptance_report and (
+        args.smoke_cycles is not None or args.foreground_runtime_seconds is not None
+    ):
+        print(
+            "ERROR: choose acceptance report, smoke, or foreground mode",
+            file=sys.stderr,
+        )
         return 1
     if args.smoke_cycles is not None and args.foreground_runtime_seconds is not None:
         print(
@@ -236,6 +265,43 @@ def run_daemon(
     root = Path(args.root)
     snapshots_dir = root / "data" / "snapshots"
     halt_state_path = root / "data" / "state" / "halt_state.json"
+    if args.acceptance_report:
+        try:
+            state_store_path = root / "data" / "state" / "portfolio_state.json"
+            if state_store_factory is StateStore and not state_store_path.exists():
+                state_store = _UnavailableStateStore(state_store_path)
+            else:
+                state_store = state_store_factory(state_store_path)
+            ledger_reader = ledger_reader_factory(root)
+            halt_state = halt_loader(root)
+            provider_factory = readiness_provider_factory or build_readiness_provider
+            readiness_provider = provider_factory(
+                state_store=state_store,
+                snapshots_dir=snapshots_dir,
+                halt_state_path=halt_state_path,
+            )
+            report = acceptance_report_builder(
+                state_store=state_store,
+                ledger_reader=ledger_reader,
+                readiness_provider=readiness_provider,
+                snapshots_dir=snapshots_dir,
+                halt_state_path=halt_state_path,
+                scheduler_builder=build_cadence_scheduler,
+            )
+            diagnostic = diagnostic_provider(state_store, halt_state).run()
+            report["startup_gate"]["diagnostics_passed"] = diagnostic.passed
+            if not diagnostic.passed and diagnostic.reason:
+                report.setdefault("errors", []).append(diagnostic.reason)
+                report["success"] = False
+        except StateStoreCorruptError as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            return 1
+        except (RuntimeError, ValueError, OSError) as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            return 1
+        print(json.dumps(report, sort_keys=True))
+        return 0 if report.get("success") is True else 1
+
     try:
         env_loader()
         config_loader()
@@ -249,7 +315,7 @@ def run_daemon(
         return 1
 
     halt_state = halt_loader(root)
-    if _halt_is_active(halt_state):
+    if halt_is_active(halt_state):
         _append_startup_blocked(ledger, halt_state)
         print("ERROR: startup blocked by active halt_state.json", file=sys.stderr)
         return 1
@@ -333,6 +399,12 @@ def _install_shutdown_handlers(scheduler: Any) -> None:
     signal.signal(signal.SIGTERM, handler)
 
 
+class _UnavailableStateStore:
+    def __init__(self, path: Path) -> None:
+        self.path = path
+        self.state = None
+
+
 def _shutdown_scheduler(
     scheduler: Any,
     *,
@@ -353,14 +425,6 @@ def _shutdown_scheduler(
         )
         return 1
     return 0
-
-
-def _halt_is_active(halt_state: Any) -> bool:
-    if not isinstance(halt_state, dict):
-        return False
-    if halt_state.get("resumed") is True:
-        return False
-    return halt_state.get("tier") in {"soft", "hard"}
 
 
 def _append_startup_blocked(ledger: Any, halt_state: dict[str, Any]) -> None:
