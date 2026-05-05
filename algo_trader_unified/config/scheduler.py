@@ -18,7 +18,9 @@ SCHEDULER_SHUTDOWN_TIMEOUT_SEC = 10
 
 JOB_KEEPALIVE = "keepalive"
 JOB_RISK_MONITOR = "risk_monitor"
+JOB_HEARTBEAT = "heartbeat"
 JOB_MARKET_OPEN_SCAN = "market_open_scan"
+JOB_EOD_REVIEW = "eod_review"
 JOB_DAILY_DIGEST = "daily_digest"
 JOB_WEEKLY_DIGEST = "weekly_digest"
 JOB_S01_VOL_SCAN = "s01_vol_scan_stub"
