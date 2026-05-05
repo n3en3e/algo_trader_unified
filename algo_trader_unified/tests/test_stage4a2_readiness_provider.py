@@ -87,10 +87,12 @@ class ConstructorAndBoundaryTests(ReadinessProviderCase):
         snapshot = self.provider()()
         self.assertIsInstance(snapshot, HealthSnapshot)
 
-    def test_provider_is_not_wired_into_daemon_entrypoint(self) -> None:
+    def test_provider_is_wired_only_for_explicit_daemon_smoke_mode(self) -> None:
         source = (PACKAGE_ROOT / "tools/daemon.py").read_text(encoding="utf-8")
-        self.assertNotIn("DefaultHealthSnapshotProvider", source)
-        self.assertNotIn("readiness_provider", source)
+        self.assertIn("DefaultHealthSnapshotProvider", source)
+        self.assertIn("--smoke-cycles", source)
+        self.assertIn("readiness_provider_factory", source)
+        self.assertIn("run_bounded_dry_run_smoke", source)
 
     def test_provider_source_has_no_broker_or_live_boundaries(self) -> None:
         source = (PACKAGE_ROOT / "core/readiness_provider.py").read_text(encoding="utf-8")

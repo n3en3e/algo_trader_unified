@@ -12,9 +12,12 @@ from pathlib import Path
 from typing import Any, Callable, Protocol
 
 from algo_trader_unified.config.scheduler import SCHEDULER_SHUTDOWN_TIMEOUT_SEC
+from algo_trader_unified.config.portfolio import S01_VOL_BASELINE, S02_VOL_ENHANCED
 from algo_trader_unified.core.ledger import LedgerAppender
 from algo_trader_unified.core.readiness import ReadinessManager
+from algo_trader_unified.core.readiness_provider import DefaultHealthSnapshotProvider
 from algo_trader_unified.core.scheduler import UnifiedScheduler
+from algo_trader_unified.core.scheduler_cadence import run_bounded_dry_run_smoke
 from algo_trader_unified.core.state_store import (
     CURRENT_SCHEMA_VERSION,
     StateStore,
@@ -51,6 +54,32 @@ class DiagnosticProviderFactory(Protocol):
 
 class SchedulerFactory(Protocol):
     def __call__(self, *, state_store: Any, ledger: Any) -> SchedulerLike:
+        ...
+
+
+class ReadinessProviderFactory(Protocol):
+    def __call__(
+        self,
+        *,
+        state_store: Any,
+        snapshots_dir: Path,
+        halt_state_path: Path,
+    ) -> Callable[[], Any]:
+        ...
+
+
+class SmokeRunner(Protocol):
+    def __call__(
+        self,
+        *,
+        state_store: Any,
+        ledger: Any,
+        readiness_provider: Callable[[], Any],
+        snapshots_dir: Path,
+        halt_state_path: Path,
+        cycles: int,
+        include_lifecycle_pipeline: bool,
+    ) -> dict[str, Any]:
         ...
 
 
@@ -105,6 +134,21 @@ def load_halt_state(root_dir: str | Path = ".") -> HaltState:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def build_readiness_provider(
+    *,
+    state_store: Any,
+    snapshots_dir: Path,
+    halt_state_path: Path,
+) -> DefaultHealthSnapshotProvider:
+    return DefaultHealthSnapshotProvider(
+        state_store=state_store,
+        halt_state_path=halt_state_path,
+        snapshots_dir=snapshots_dir,
+        max_staleness_minutes=15,
+        strategy_ids=[S01_VOL_BASELINE, S02_VOL_ENHANCED],
+    )
+
+
 def build_scheduler(
     *,
     state_store: Any,
@@ -131,17 +175,26 @@ def run_daemon(
     halt_loader: Callable[[Path], HaltState],
     diagnostic_provider: DiagnosticProviderFactory,
     scheduler_factory: SchedulerFactory,
+    readiness_provider_factory: ReadinessProviderFactory | None = None,
+    smoke_runner: SmokeRunner = run_bounded_dry_run_smoke,
 ) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dry-run-only", action="store_true")
     parser.add_argument("--root", default=".")
+    parser.add_argument("--smoke-cycles", type=int)
+    parser.add_argument("--enable-lifecycle-pipeline", action="store_true")
     args = parser.parse_args(argv)
 
     if not args.dry_run_only:
         print("ERROR: daemon mode requires --dry-run-only", file=sys.stderr)
         return 1
+    if args.smoke_cycles is not None and args.smoke_cycles <= 0:
+        print("ERROR: --smoke-cycles must be a positive finite integer", file=sys.stderr)
+        return 1
 
     root = Path(args.root)
+    snapshots_dir = root / "data" / "snapshots"
+    halt_state_path = root / "data" / "state" / "halt_state.json"
     try:
         env_loader()
         config_loader()
@@ -167,6 +220,25 @@ def run_daemon(
         print(f"ERROR: startup diagnostics failed: {reason}", file=sys.stderr)
         return 1
 
+    if args.smoke_cycles is not None:
+        provider_factory = readiness_provider_factory or build_readiness_provider
+        readiness_provider = provider_factory(
+            state_store=state_store,
+            snapshots_dir=snapshots_dir,
+            halt_state_path=halt_state_path,
+        )
+        summary = smoke_runner(
+            state_store=state_store,
+            ledger=ledger,
+            readiness_provider=readiness_provider,
+            snapshots_dir=snapshots_dir,
+            halt_state_path=halt_state_path,
+            cycles=args.smoke_cycles,
+            include_lifecycle_pipeline=args.enable_lifecycle_pipeline,
+        )
+        print(json.dumps(summary, sort_keys=True))
+        return 0 if summary.get("success") is True else 1
+
     scheduler = scheduler_factory(state_store=state_store, ledger=ledger)
     scheduler.start()
     _install_shutdown_handlers(scheduler)
@@ -188,6 +260,7 @@ def main(argv: list[str] | None = None) -> int:
         halt_loader=load_halt_state,
         diagnostic_provider=StartupDiagnosticProvider,
         scheduler_factory=build_scheduler,
+        readiness_provider_factory=build_readiness_provider,
     )
 
 

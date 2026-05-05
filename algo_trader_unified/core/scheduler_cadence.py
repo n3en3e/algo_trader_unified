@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+from dataclasses import asdict, is_dataclass
+from datetime import date
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
@@ -70,6 +72,7 @@ def build_scheduler(
     snapshots_dir,
     halt_state_path,
     scheduler_factory: Callable[[], Any] | None = None,
+    now_provider: Callable[[], datetime] | None = None,
 ):
     scheduler = _new_scheduler(scheduler_factory)
     if not enable_triggers:
@@ -78,6 +81,7 @@ def build_scheduler(
     snapshots_path = Path(snapshots_dir)
     halt_path = Path(halt_state_path)
     readiness_manager = ReadinessManager(state_store, ledger)
+    current_time = now_provider or _scheduler_now_datetime
 
     _add_interval_job(
         scheduler,
@@ -111,6 +115,7 @@ def build_scheduler(
         lambda: run_market_open_scan_job(
             readiness_manager=readiness_manager,
             readiness_provider=readiness_provider,
+            current_time=current_time(),
         ),
         hour=9,
         minute=35,
@@ -158,6 +163,7 @@ def build_scheduler(
             ledger=ledger,
             snapshots_dir=snapshots_path,
             halt_state_path=halt_path,
+            now=current_time(),
         ),
         hour=17,
         minute=0,
@@ -168,8 +174,83 @@ def build_scheduler(
             scheduler=scheduler,
             state_store=state_store,
             ledger=ledger,
+            now_provider=current_time,
         )
     return scheduler
+
+
+def run_bounded_dry_run_smoke(
+    *,
+    state_store,
+    ledger,
+    readiness_provider,
+    snapshots_dir,
+    halt_state_path,
+    cycles: int,
+    include_lifecycle_pipeline: bool,
+    now_provider: Callable[[], datetime] | None = None,
+    sleep_fn: Callable[[float], None] | None = None,
+) -> dict[str, Any]:
+    if cycles <= 0:
+        raise ValueError("smoke cycles must be a positive finite integer")
+
+    collector = _SmokeScheduler()
+    build_scheduler(
+        enable_triggers=True,
+        enable_lifecycle_pipeline=include_lifecycle_pipeline,
+        state_store=state_store,
+        ledger=ledger,
+        readiness_provider=readiness_provider,
+        snapshots_dir=snapshots_dir,
+        halt_state_path=halt_state_path,
+        scheduler_factory=lambda: collector,
+        now_provider=now_provider,
+    )
+    jobs_by_id = {job["id"]: job["func"] for job in collector.jobs}
+    job_order = _smoke_job_order(include_lifecycle_pipeline)
+    jobs_run = {job_id: 0 for job_id in job_order}
+    job_results: list[dict[str, Any]] = []
+    errors: list[dict[str, Any]] = []
+    completed = 0
+    nap = sleep_fn or (lambda seconds: None)
+
+    for cycle_index in range(cycles):
+        try:
+            for job_id in job_order:
+                result = jobs_by_id[job_id]()
+                jobs_run[job_id] += 1
+                job_results.append(
+                    {
+                        "cycle": cycle_index + 1,
+                        "job_id": job_id,
+                        "dry_run": True,
+                        "result": _json_safe(result),
+                    }
+                )
+            completed += 1
+        except Exception as exc:
+            errors.append(
+                {
+                    "cycle": cycle_index + 1,
+                    "job_id": job_id,
+                    "error_type": type(exc).__name__,
+                    "message": str(exc),
+                }
+            )
+            break
+        if cycle_index + 1 < cycles:
+            nap(0)
+
+    return {
+        "dry_run": True,
+        "cycles_requested": cycles,
+        "cycles_completed": completed,
+        "include_lifecycle_pipeline": include_lifecycle_pipeline,
+        "jobs_run": jobs_run,
+        "job_results": job_results,
+        "errors": errors,
+        "success": not errors and completed == cycles,
+    }
 
 
 def run_keepalive() -> dict[str, str]:
@@ -215,10 +296,16 @@ def run_heartbeat(*, state_store, snapshots_dir: Path, halt_state_path: Path) ->
     return payload
 
 
-def run_market_open_scan_job(*, readiness_manager: ReadinessManager, readiness_provider):
+def run_market_open_scan_job(
+    *,
+    readiness_manager: ReadinessManager,
+    readiness_provider,
+    current_time: datetime | None = None,
+):
     strategy_ids = (S01_VOL_BASELINE, S02_VOL_ENHANCED)
     return market_open_scan(
         readiness_manager=readiness_manager,
+        current_time=current_time,
         strategy_ids=strategy_ids,
         health_snapshot=readiness_provider(),
     )
@@ -303,14 +390,14 @@ def run_daily_digest_job(
     )
 
 
-def _add_stage4b_lifecycle_jobs(*, scheduler, state_store, ledger) -> None:
+def _add_stage4b_lifecycle_jobs(*, scheduler, state_store, ledger, now_provider) -> None:
     _add_interval_job(
         scheduler,
         JOB_DRY_RUN_SUBMIT_PENDING_INTENTS,
         lambda: run_intent_submission_job(
             state_store=state_store,
             ledger=ledger,
-            now=_scheduler_now(),
+            now=_scheduler_now(now_provider),
         ),
         seconds=60,
     )
@@ -320,7 +407,7 @@ def _add_stage4b_lifecycle_jobs(*, scheduler, state_store, ledger) -> None:
         lambda: run_intent_confirmation_job(
             state_store=state_store,
             ledger=ledger,
-            now=_scheduler_now(),
+            now=_scheduler_now(now_provider),
         ),
         seconds=60,
     )
@@ -330,7 +417,7 @@ def _add_stage4b_lifecycle_jobs(*, scheduler, state_store, ledger) -> None:
         lambda: run_intent_fill_confirmation_job(
             state_store=state_store,
             ledger=ledger,
-            now=_scheduler_now(),
+            now=_scheduler_now(now_provider),
         ),
         seconds=60,
     )
@@ -340,14 +427,57 @@ def _add_stage4b_lifecycle_jobs(*, scheduler, state_store, ledger) -> None:
         lambda: run_position_transitions_job(
             state_store=state_store,
             ledger=ledger,
-            now=_scheduler_now(),
+            now=_scheduler_now(now_provider),
         ),
         seconds=60,
     )
 
 
-def _scheduler_now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+def _scheduler_now(now_provider: Callable[[], datetime]) -> str:
+    return now_provider().astimezone(timezone.utc).isoformat()
+
+
+def _scheduler_now_datetime() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _smoke_job_order(include_lifecycle_pipeline: bool) -> tuple[str, ...]:
+    lifecycle_jobs = STAGE4B_LIFECYCLE_JOB_IDS if include_lifecycle_pipeline else ()
+    return (
+        JOB_KEEPALIVE,
+        JOB_RISK_MONITOR,
+        JOB_HEARTBEAT,
+        JOB_MARKET_OPEN_SCAN,
+        JOB_S01_VOL_SCAN,
+        JOB_S02_VOL_SCAN,
+        *lifecycle_jobs,
+        JOB_EOD_REVIEW,
+        JOB_DAILY_DIGEST,
+    )
+
+
+class _SmokeScheduler:
+    def __init__(self) -> None:
+        self.jobs: list[dict[str, Any]] = []
+
+    def add_job(self, func, **kwargs) -> None:
+        self.jobs.append({"func": func, **kwargs})
+
+
+def _json_safe(value: Any) -> Any:
+    if is_dataclass(value):
+        return _json_safe(asdict(value))
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, date):
+        return value.isoformat()
+    if isinstance(value, dict):
+        return {str(key): _json_safe(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(item) for item in value]
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    return str(value)
 
 
 def _new_scheduler(scheduler_factory: Callable[[], Any] | None):
