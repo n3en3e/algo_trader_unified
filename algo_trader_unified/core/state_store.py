@@ -1096,14 +1096,23 @@ class StateStore:
                     return deepcopy(intent)
         return None
 
-    def list_order_intents(self, strategy_id: str | None = None) -> list[dict[str, Any]]:
-        intents = self.state.setdefault("order_intents", {}).values()
-        records = [
-            deepcopy(intent)
-            for intent in intents
-            if isinstance(intent, dict)
-            and (strategy_id is None or intent.get("strategy_id") == strategy_id)
-        ]
+    def list_order_intents(
+        self,
+        strategy_id: str | None = None,
+        status: str | None = None,
+    ) -> list[dict[str, Any]]:
+        order_intents = self.state.get("order_intents", {})
+        if not isinstance(order_intents, dict):
+            return []
+        records = []
+        for intent in order_intents.values():
+            if not isinstance(intent, dict):
+                continue
+            if strategy_id is not None and intent.get("strategy_id") != strategy_id:
+                continue
+            if status is not None and intent.get("status") != status:
+                continue
+            records.append(deepcopy(intent))
         return records
 
     def get_all_readiness(self) -> dict[str, Any]:

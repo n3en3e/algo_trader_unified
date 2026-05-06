@@ -157,6 +157,55 @@ class StateStoreOrderIntentTests(TmpCase):
         self.assertEqual(len(self.state_store.list_order_intents(S01_VOL_BASELINE)), 1)
         self.assertTrue(self.state_store.get_order_intent("s01:intent")["dry_run"])
 
+    def test_list_order_intents_filters_by_status_and_strategy(self) -> None:
+        self.create_intent(S01_VOL_BASELINE, "s01:created")
+        self.create_intent(S01_VOL_BASELINE, "s01:submitted", status="submitted")
+        self.create_intent(S02_VOL_ENHANCED, "s02:created")
+        self.create_intent(S02_VOL_ENHANCED, "s02:cancelled", status="cancelled")
+
+        self.assertEqual(len(self.state_store.list_order_intents(status=None)), 4)
+        self.assertEqual(
+            {
+                intent["intent_id"]
+                for intent in self.state_store.list_order_intents(status="created")
+            },
+            {"s01:created", "s02:created"},
+        )
+        self.assertEqual(
+            {
+                intent["intent_id"]
+                for intent in self.state_store.list_order_intents(
+                    strategy_id=S01_VOL_BASELINE,
+                    status="submitted",
+                )
+            },
+            {"s01:submitted"},
+        )
+        self.assertEqual(
+            self.state_store.list_order_intents(
+                strategy_id=S02_VOL_ENHANCED,
+                status="submitted",
+            ),
+            [],
+        )
+
+    def test_list_order_intents_returns_defensive_copies_and_handles_missing_state(self) -> None:
+        self.create_intent(S01_VOL_BASELINE, "s01:intent")
+        listed = self.state_store.list_order_intents()
+        listed[0]["status"] = "mutated"
+        self.assertEqual(
+            self.state_store.get_order_intent("s01:intent")["status"],
+            "created",
+        )
+
+        self.state_store.state.pop("order_intents")
+        self.assertEqual(self.state_store.list_order_intents(), [])
+        self.assertNotIn("order_intents", self.state_store.state)
+
+    def test_list_order_intents_handles_malformed_state(self) -> None:
+        self.state_store.state["order_intents"] = []
+        self.assertEqual(self.state_store.list_order_intents(), [])
+
     def test_legacy_intent_without_dry_run_remains_readable(self) -> None:
         legacy = self.create_intent(S01_VOL_BASELINE, "legacy:intent")
         del legacy["dry_run"]
