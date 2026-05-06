@@ -15,6 +15,8 @@ from algo_trader_unified.config.scheduler import (
     JOB_DRY_RUN_APPLY_POSITION_TRANSITIONS,
     JOB_DRY_RUN_CONFIRM_FILLS,
     JOB_DRY_RUN_CONFIRM_SUBMITTED_ORDERS,
+    JOB_DRY_RUN_EOD_INTENT_CLEANUP,
+    JOB_DRY_RUN_EXPIRE_INTENTS,
     JOB_DRY_RUN_SUBMIT_PENDING_INTENTS,
     JOB_EOD_REVIEW,
     JOB_HEARTBEAT,
@@ -43,9 +45,8 @@ STAGE4A_JOB_IDS = [
 
 STAGE4B_LIFECYCLE_JOB_IDS = [
     JOB_DRY_RUN_SUBMIT_PENDING_INTENTS,
-    JOB_DRY_RUN_CONFIRM_SUBMITTED_ORDERS,
-    JOB_DRY_RUN_CONFIRM_FILLS,
-    JOB_DRY_RUN_APPLY_POSITION_TRANSITIONS,
+    JOB_DRY_RUN_EXPIRE_INTENTS,
+    JOB_DRY_RUN_EOD_INTENT_CLEANUP,
 ]
 
 
@@ -187,12 +188,18 @@ class ForegroundRunnerTests(ForegroundCase):
         summary = self.run_foreground(enable_triggers=True, include_lifecycle_pipeline=False)
         self.assertEqual(summary["jobs_registered"], STAGE4A_JOB_IDS)
 
-    def test_enable_lifecycle_pipeline_registers_stage4a_plus_lifecycle_jobs(self) -> None:
+    def test_enable_lifecycle_pipeline_registers_stage4a_plus_intent_level_lifecycle_jobs(self) -> None:
         summary = self.run_foreground(enable_triggers=True, include_lifecycle_pipeline=True)
         self.assertEqual(
             summary["jobs_registered"],
             [*STAGE4A_JOB_IDS, *STAGE4B_LIFECYCLE_JOB_IDS],
         )
+        forbidden = {
+            JOB_DRY_RUN_CONFIRM_SUBMITTED_ORDERS,
+            JOB_DRY_RUN_CONFIRM_FILLS,
+            JOB_DRY_RUN_APPLY_POSITION_TRANSITIONS,
+        }
+        self.assertFalse(forbidden & set(summary["jobs_registered"]))
 
     def test_keyboard_interrupt_during_wait_gracefully_shutdowns(self) -> None:
         def interrupting_sleep(seconds):

@@ -14,9 +14,8 @@ from typing import Any, Callable
 from algo_trader_unified.config.portfolio import S01_VOL_BASELINE, S02_VOL_ENHANCED
 from algo_trader_unified.config.scheduler import (
     JOB_DAILY_DIGEST,
-    JOB_DRY_RUN_APPLY_POSITION_TRANSITIONS,
-    JOB_DRY_RUN_CONFIRM_FILLS,
-    JOB_DRY_RUN_CONFIRM_SUBMITTED_ORDERS,
+    JOB_DRY_RUN_EOD_INTENT_CLEANUP,
+    JOB_DRY_RUN_EXPIRE_INTENTS,
     JOB_DRY_RUN_SUBMIT_PENDING_INTENTS,
     JOB_EOD_REVIEW,
     JOB_HEARTBEAT,
@@ -33,10 +32,11 @@ from algo_trader_unified.core.skip_reasons import (
     SKIP_READINESS_NOT_EVALUATED,
     SKIP_STATESTORE_UNREADABLE,
 )
-from algo_trader_unified.jobs.confirmation import run_intent_confirmation_job
 from algo_trader_unified.jobs.daily_digest import run_daily_digest
-from algo_trader_unified.jobs.fill_confirmation import run_intent_fill_confirmation_job
-from algo_trader_unified.jobs.position_transitions import run_position_transitions_job
+from algo_trader_unified.jobs.intent_cleanup import (
+    run_eod_intent_cleanup_job,
+    run_intent_expiry_job,
+)
 from algo_trader_unified.jobs.readiness import market_open_scan
 from algo_trader_unified.jobs.submission import run_intent_submission_job
 
@@ -54,9 +54,8 @@ STAGE4A_JOB_IDS = (
 
 STAGE4B_LIFECYCLE_JOB_IDS = (
     JOB_DRY_RUN_SUBMIT_PENDING_INTENTS,
-    JOB_DRY_RUN_CONFIRM_SUBMITTED_ORDERS,
-    JOB_DRY_RUN_CONFIRM_FILLS,
-    JOB_DRY_RUN_APPLY_POSITION_TRANSITIONS,
+    JOB_DRY_RUN_EXPIRE_INTENTS,
+    JOB_DRY_RUN_EOD_INTENT_CLEANUP,
 )
 
 _ACTIVE_INTENT_STATUSES = {"created", "submitted", "confirmed", "filled"}
@@ -177,6 +176,8 @@ def build_scheduler(
             state_store=state_store,
             ledger=ledger,
             now_provider=current_time,
+            readiness_provider=readiness_provider,
+            halt_state_path=halt_path,
         )
     return scheduler
 
@@ -484,47 +485,138 @@ def run_daily_digest_job(
     )
 
 
-def _add_stage4b_lifecycle_jobs(*, scheduler, state_store, ledger, now_provider) -> None:
+def _add_stage4b_lifecycle_jobs(
+    *,
+    scheduler,
+    state_store,
+    ledger,
+    now_provider,
+    readiness_provider,
+    halt_state_path: Path,
+) -> None:
     _add_interval_job(
         scheduler,
         JOB_DRY_RUN_SUBMIT_PENDING_INTENTS,
-        lambda: run_intent_submission_job(
+        lambda: _run_stage4b_intent_job(
+            job_id=JOB_DRY_RUN_SUBMIT_PENDING_INTENTS,
+            job_func=run_intent_submission_job,
             state_store=state_store,
             ledger=ledger,
-            now=_scheduler_now(now_provider),
+            now_provider=now_provider,
+            readiness_provider=readiness_provider,
+            halt_state_path=halt_state_path,
         ),
         seconds=60,
     )
     _add_interval_job(
         scheduler,
-        JOB_DRY_RUN_CONFIRM_SUBMITTED_ORDERS,
-        lambda: run_intent_confirmation_job(
+        JOB_DRY_RUN_EXPIRE_INTENTS,
+        lambda: _run_stage4b_intent_job(
+            job_id=JOB_DRY_RUN_EXPIRE_INTENTS,
+            job_func=run_intent_expiry_job,
             state_store=state_store,
             ledger=ledger,
-            now=_scheduler_now(now_provider),
+            now_provider=now_provider,
+            readiness_provider=readiness_provider,
+            halt_state_path=halt_state_path,
         ),
         seconds=60,
     )
-    _add_interval_job(
+    _add_cron_job(
         scheduler,
-        JOB_DRY_RUN_CONFIRM_FILLS,
-        lambda: run_intent_fill_confirmation_job(
+        JOB_DRY_RUN_EOD_INTENT_CLEANUP,
+        lambda: _run_stage4b_intent_job(
+            job_id=JOB_DRY_RUN_EOD_INTENT_CLEANUP,
+            job_func=run_eod_intent_cleanup_job,
             state_store=state_store,
             ledger=ledger,
-            now=_scheduler_now(now_provider),
+            now_provider=now_provider,
+            readiness_provider=readiness_provider,
+            halt_state_path=halt_state_path,
         ),
-        seconds=60,
+        hour=16,
+        minute=10,
+        coalesce=True,
     )
-    _add_interval_job(
-        scheduler,
-        JOB_DRY_RUN_APPLY_POSITION_TRANSITIONS,
-        lambda: run_position_transitions_job(
-            state_store=state_store,
-            ledger=ledger,
-            now=_scheduler_now(now_provider),
-        ),
-        seconds=60,
+
+
+def _run_stage4b_intent_job(
+    *,
+    job_id: str,
+    job_func,
+    state_store,
+    ledger,
+    now_provider,
+    readiness_provider,
+    halt_state_path: Path,
+) -> dict[str, Any]:
+    blocked_reason = _stage4b_intent_job_block_reason(
+        state_store=state_store,
+        readiness_provider=readiness_provider,
+        halt_state_path=halt_state_path,
     )
+    if blocked_reason is not None:
+        return {
+            "dry_run": True,
+            "job_id": job_id,
+            "status": "skipped",
+            "reason": blocked_reason,
+        }
+    return job_func(
+        state_store=state_store,
+        ledger=ledger,
+        now=_scheduler_now(now_provider),
+    )
+
+
+def _stage4b_intent_job_block_reason(
+    *,
+    state_store,
+    readiness_provider,
+    halt_state_path: Path,
+) -> str | None:
+    if _halt_state_summary(halt_state_path).startswith("active:"):
+        return "halt_active"
+    if _has_needs_reconciliation(state_store):
+        return "needs_reconciliation"
+    try:
+        snapshot = readiness_provider()
+    except Exception:
+        return "readiness_unavailable"
+    if not getattr(snapshot, "state_store_readable", False):
+        return "readiness_state_store_unreadable"
+    if not getattr(snapshot, "account_snapshot_fresh", False):
+        return "readiness_account_snapshot_stale"
+    if not getattr(snapshot, "nlv_valid", False):
+        return "readiness_nlv_invalid"
+    for mapping_name in (
+        "halt_active_by_strategy",
+        "dirty_state_by_strategy",
+        "unknown_broker_exposure_by_strategy",
+        "calendar_expired_by_strategy",
+    ):
+        mapping = getattr(snapshot, mapping_name, {})
+        if isinstance(mapping, dict) and any(bool(value) for value in mapping.values()):
+            return f"readiness_{mapping_name}"
+    iv_mapping = getattr(snapshot, "iv_baseline_available_by_strategy", {})
+    if isinstance(iv_mapping, dict) and any(value is False for value in iv_mapping.values()):
+        return "readiness_iv_baseline_unavailable"
+    return None
+
+
+def _has_needs_reconciliation(state_store) -> bool:
+    state = getattr(state_store, "state", {})
+    if not isinstance(state, dict):
+        return True
+    for key in ("positions", "order_intents", "close_intents"):
+        collection = state.get(key, {})
+        values = collection.values() if isinstance(collection, dict) else collection
+        if not isinstance(values, list) and not hasattr(values, "__iter__"):
+            continue
+        for record in values:
+            if isinstance(record, dict) and record.get("status") == "NEEDS_RECONCILIATION":
+                return True
+    return False
 
 
 def _scheduler_now(now_provider: Callable[[], datetime]) -> str:

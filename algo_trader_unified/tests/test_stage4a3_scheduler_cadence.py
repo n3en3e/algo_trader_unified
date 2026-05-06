@@ -17,6 +17,8 @@ from algo_trader_unified.config.scheduler import (
     JOB_DRY_RUN_APPLY_POSITION_TRANSITIONS,
     JOB_DRY_RUN_CONFIRM_FILLS,
     JOB_DRY_RUN_CONFIRM_SUBMITTED_ORDERS,
+    JOB_DRY_RUN_EOD_INTENT_CLEANUP,
+    JOB_DRY_RUN_EXPIRE_INTENTS,
     JOB_DRY_RUN_SUBMIT_PENDING_INTENTS,
     JOB_EOD_REVIEW,
     JOB_HEARTBEAT,
@@ -40,6 +42,12 @@ from algo_trader_unified.core.skip_reasons import (
     SKIP_NLV_DEGRADED,
     SKIP_STATESTORE_UNREADABLE,
 )
+from algo_trader_unified.core.state_store import StateStore
+from algo_trader_unified.jobs.intent_cleanup import (
+    run_eod_intent_cleanup_job,
+    run_intent_expiry_job,
+)
+from algo_trader_unified.jobs.readiness import all_clear_health_snapshot
 
 
 class FakeScheduler:
@@ -104,6 +112,25 @@ class FakeStateStore:
         return self.readiness.get(strategy_id)
 
 
+def _order_intent_record(*, intent_id: str, strategy_id: str, created_at: str) -> dict:
+    return {
+        "intent_id": intent_id,
+        "strategy_id": strategy_id,
+        "sleeve_id": "VOL",
+        "symbol": "XSP",
+        "execution_mode": "paper_only",
+        "status": "created",
+        "source_signal_event_id": None,
+        "order_intent_created_event_id": "evt_manual",
+        "order_ref": intent_id,
+        "created_at": created_at,
+        "updated_at": created_at,
+        "sizing_context": {},
+        "risk_context": {},
+        "signal_payload_snapshot": {},
+    }
+
+
 class FakeReadinessManager:
     def __init__(self, readiness=None, exc=None):
         self.readiness = readiness
@@ -134,7 +161,9 @@ class SchedulerCadenceCase(unittest.TestCase):
             enable_lifecycle_pipeline=enable_lifecycle_pipeline,
             state_store=self.state_store,
             ledger=self.ledger,
-            readiness_provider=lambda: None,
+            readiness_provider=lambda: all_clear_health_snapshot(
+                [S01_VOL_BASELINE, S02_VOL_ENHANCED]
+            ),
             snapshots_dir=self.snapshots_dir,
             halt_state_path=self.halt_state_path,
             scheduler_factory=lambda: self.scheduler,
@@ -203,11 +232,16 @@ class BuilderSignatureAndRegistrationTests(SchedulerCadenceCase):
                 JOB_EOD_REVIEW,
                 JOB_DAILY_DIGEST,
                 JOB_DRY_RUN_SUBMIT_PENDING_INTENTS,
-                JOB_DRY_RUN_CONFIRM_SUBMITTED_ORDERS,
-                JOB_DRY_RUN_CONFIRM_FILLS,
-                JOB_DRY_RUN_APPLY_POSITION_TRANSITIONS,
+                JOB_DRY_RUN_EXPIRE_INTENTS,
+                JOB_DRY_RUN_EOD_INTENT_CLEANUP,
             ],
         )
+        forbidden = {
+            JOB_DRY_RUN_CONFIRM_SUBMITTED_ORDERS,
+            JOB_DRY_RUN_CONFIRM_FILLS,
+            JOB_DRY_RUN_APPLY_POSITION_TRANSITIONS,
+        }
+        self.assertFalse(forbidden & {job["id"] for job in self.scheduler.jobs})
 
     def test_interval_jobs_have_expected_cadence_and_options(self) -> None:
         self.build(enable_lifecycle_pipeline=True)
@@ -221,14 +255,17 @@ class BuilderSignatureAndRegistrationTests(SchedulerCadenceCase):
             self.assertTrue(by_id[job_id]["coalesce"])
         for job_id in (
             JOB_DRY_RUN_SUBMIT_PENDING_INTENTS,
-            JOB_DRY_RUN_CONFIRM_SUBMITTED_ORDERS,
-            JOB_DRY_RUN_CONFIRM_FILLS,
-            JOB_DRY_RUN_APPLY_POSITION_TRANSITIONS,
+            JOB_DRY_RUN_EXPIRE_INTENTS,
         ):
             self.assertEqual(by_id[job_id]["trigger"], "interval")
             self.assertEqual(by_id[job_id]["seconds"], 60)
             self.assertEqual(by_id[job_id]["max_instances"], 1)
             self.assertTrue(by_id[job_id]["coalesce"])
+        self.assertEqual(by_id[JOB_DRY_RUN_EOD_INTENT_CLEANUP]["trigger"], "cron")
+        self.assertEqual(by_id[JOB_DRY_RUN_EOD_INTENT_CLEANUP]["hour"], 16)
+        self.assertEqual(by_id[JOB_DRY_RUN_EOD_INTENT_CLEANUP]["minute"], 10)
+        self.assertEqual(by_id[JOB_DRY_RUN_EOD_INTENT_CLEANUP]["max_instances"], 1)
+        self.assertTrue(by_id[JOB_DRY_RUN_EOD_INTENT_CLEANUP]["coalesce"])
 
     def test_cron_jobs_have_expected_cadence_options_and_timezone(self) -> None:
         self.build()
@@ -255,9 +292,8 @@ class BuilderSignatureAndRegistrationTests(SchedulerCadenceCase):
         by_id = {job["id"]: job for job in self.scheduler.jobs}
         expected_by_id = {
             JOB_DRY_RUN_SUBMIT_PENDING_INTENTS: "run_intent_submission_job",
-            JOB_DRY_RUN_CONFIRM_SUBMITTED_ORDERS: "run_intent_confirmation_job",
-            JOB_DRY_RUN_CONFIRM_FILLS: "run_intent_fill_confirmation_job",
-            JOB_DRY_RUN_APPLY_POSITION_TRANSITIONS: "run_position_transitions_job",
+            JOB_DRY_RUN_EXPIRE_INTENTS: "run_intent_expiry_job",
+            JOB_DRY_RUN_EOD_INTENT_CLEANUP: "run_eod_intent_cleanup_job",
         }
         for job_id, wrapper_name in expected_by_id.items():
             wrapper = mock.Mock(return_value={"dry_run": True, "job_id": job_id})
@@ -280,10 +316,9 @@ class BuilderSignatureAndRegistrationTests(SchedulerCadenceCase):
         before = deepcopy(self.state_store.state)
         self.build(enable_lifecycle_pipeline=True)
         lifecycle_ids = (
-            JOB_DRY_RUN_CONFIRM_FILLS,
-            JOB_DRY_RUN_APPLY_POSITION_TRANSITIONS,
-            JOB_DRY_RUN_CONFIRM_SUBMITTED_ORDERS,
             JOB_DRY_RUN_SUBMIT_PENDING_INTENTS,
+            JOB_DRY_RUN_EXPIRE_INTENTS,
+            JOB_DRY_RUN_EOD_INTENT_CLEANUP,
         )
         by_id = {job["id"]: job for job in self.scheduler.jobs}
         for job_id in lifecycle_ids:
@@ -296,16 +331,25 @@ class BuilderSignatureAndRegistrationTests(SchedulerCadenceCase):
     def test_lifecycle_pipeline_job_specs_are_disabled_by_default(self) -> None:
         for job_id in (
             JOB_DRY_RUN_SUBMIT_PENDING_INTENTS,
-            JOB_DRY_RUN_CONFIRM_SUBMITTED_ORDERS,
-            JOB_DRY_RUN_CONFIRM_FILLS,
-            JOB_DRY_RUN_APPLY_POSITION_TRANSITIONS,
+            JOB_DRY_RUN_EXPIRE_INTENTS,
+            JOB_DRY_RUN_EOD_INTENT_CLEANUP,
         ):
             spec = JOB_SPECS[job_id]
             self.assertFalse(spec.enabled)
-            self.assertEqual(spec.trigger_type, "interval")
-            self.assertEqual(spec.trigger_kwargs, {"seconds": 60})
             self.assertEqual(spec.max_instances, 1)
             self.assertTrue(spec.coalesce)
+        self.assertEqual(JOB_SPECS[JOB_DRY_RUN_SUBMIT_PENDING_INTENTS].trigger_type, "interval")
+        self.assertEqual(JOB_SPECS[JOB_DRY_RUN_EXPIRE_INTENTS].trigger_type, "interval")
+        self.assertEqual(JOB_SPECS[JOB_DRY_RUN_EOD_INTENT_CLEANUP].trigger_type, "cron")
+        self.assertEqual(
+            JOB_SPECS[JOB_DRY_RUN_EOD_INTENT_CLEANUP].trigger_kwargs,
+            {
+                "day_of_week": "mon-fri",
+                "hour": 16,
+                "minute": 10,
+                "timezone": SCHEDULER_TIMEZONE,
+            },
+        )
 
 
 class LocalJobBehaviorTests(SchedulerCadenceCase):
@@ -338,6 +382,57 @@ class LocalJobBehaviorTests(SchedulerCadenceCase):
         self.assertIn("active:account:hard", result["halt"])
         self.assertEqual(before, self.state_store.state)
         self.assertEqual(self.ledger.events, [])
+
+    def test_intent_expiry_job_only_expires_stale_created_order_intents(self) -> None:
+        state_store = StateStore(self.root / "data/state/portfolio_state.json")
+        state_store.create_order_intent(
+            _order_intent_record(
+                intent_id="s01:stale",
+                strategy_id=S01_VOL_BASELINE,
+                created_at="2026-05-05T13:00:00+00:00",
+            )
+        )
+        state_store.create_order_intent(
+            _order_intent_record(
+                intent_id="s02:fresh",
+                strategy_id=S02_VOL_ENHANCED,
+                created_at="2026-05-05T13:50:00+00:00",
+            )
+        )
+
+        result = run_intent_expiry_job(
+            state_store=state_store,
+            ledger=self.ledger,
+            now="2026-05-05T14:00:00+00:00",
+        )
+
+        self.assertTrue(result["dry_run"])
+        self.assertEqual(result["expired_order_intents_count"], 1)
+        self.assertEqual(state_store.get_order_intent("s01:stale")["status"], "expired")
+        self.assertEqual(state_store.get_order_intent("s02:fresh")["status"], "created")
+        self.assertEqual([event["event_type"] for event in self.ledger.events], ["ORDER_INTENT_EXPIRED"])
+
+    def test_eod_intent_cleanup_cancels_created_order_intents_without_position_side_effects(self) -> None:
+        state_store = StateStore(self.root / "data/state/portfolio_state.json")
+        state_store.create_order_intent(
+            _order_intent_record(
+                intent_id="s01:eod",
+                strategy_id=S01_VOL_BASELINE,
+                created_at="2026-05-05T13:00:00+00:00",
+            )
+        )
+
+        result = run_eod_intent_cleanup_job(
+            state_store=state_store,
+            ledger=self.ledger,
+            now="2026-05-05T20:10:00+00:00",
+        )
+
+        self.assertTrue(result["dry_run"])
+        self.assertEqual(result["cancelled_order_intents_count"], 1)
+        self.assertEqual(state_store.get_order_intent("s01:eod")["status"], "cancelled")
+        self.assertEqual(state_store.list_positions(), [])
+        self.assertEqual([event["event_type"] for event in self.ledger.events], ["ORDER_INTENT_CANCELLED"])
 
     def test_risk_monitor_marks_stale_snapshot_unfresh(self) -> None:
         self.snapshots_dir.mkdir(parents=True)

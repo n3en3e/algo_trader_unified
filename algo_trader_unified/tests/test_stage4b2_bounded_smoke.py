@@ -15,6 +15,8 @@ from algo_trader_unified.config.scheduler import (
     JOB_DRY_RUN_APPLY_POSITION_TRANSITIONS,
     JOB_DRY_RUN_CONFIRM_FILLS,
     JOB_DRY_RUN_CONFIRM_SUBMITTED_ORDERS,
+    JOB_DRY_RUN_EOD_INTENT_CLEANUP,
+    JOB_DRY_RUN_EXPIRE_INTENTS,
     JOB_DRY_RUN_SUBMIT_PENDING_INTENTS,
     JOB_EOD_REVIEW,
     JOB_HEARTBEAT,
@@ -43,9 +45,8 @@ STAGE4A_SMOKE_ORDER = [
 
 STAGE4B2_LIFECYCLE_ORDER = [
     JOB_DRY_RUN_SUBMIT_PENDING_INTENTS,
-    JOB_DRY_RUN_CONFIRM_SUBMITTED_ORDERS,
-    JOB_DRY_RUN_CONFIRM_FILLS,
-    JOB_DRY_RUN_APPLY_POSITION_TRANSITIONS,
+    JOB_DRY_RUN_EXPIRE_INTENTS,
+    JOB_DRY_RUN_EOD_INTENT_CLEANUP,
 ]
 
 
@@ -114,7 +115,7 @@ class BoundedSmokeRunnerTests(SmokeCase):
         self.assertEqual([item["job_id"] for item in summary["job_results"]], STAGE4A_SMOKE_ORDER)
         json.dumps(summary)
 
-    def test_lifecycle_flag_adds_exact_four_stage4b_jobs_before_eod_and_digest(self) -> None:
+    def test_lifecycle_flag_adds_only_intent_level_stage4b_jobs_before_eod_and_digest(self) -> None:
         summary = self.run_smoke(include_lifecycle_pipeline=True)
         expected = [
             JOB_KEEPALIVE,
@@ -130,6 +131,12 @@ class BoundedSmokeRunnerTests(SmokeCase):
         self.assertTrue(summary["success"])
         self.assertEqual([item["job_id"] for item in summary["job_results"]], expected)
         self.assertEqual(summary["jobs_run"], {job_id: 1 for job_id in expected})
+        forbidden = {
+            JOB_DRY_RUN_CONFIRM_SUBMITTED_ORDERS,
+            JOB_DRY_RUN_CONFIRM_FILLS,
+            JOB_DRY_RUN_APPLY_POSITION_TRANSITIONS,
+        }
+        self.assertFalse(forbidden & set(summary["jobs_run"]))
         for job_id in STAGE4B2_LIFECYCLE_ORDER:
             result = next(item for item in summary["job_results"] if item["job_id"] == job_id)
             self.assertIs(result["result"]["dry_run"], True)
@@ -151,7 +158,7 @@ class BoundedSmokeRunnerTests(SmokeCase):
             for item in summary["job_results"]
             if item["job_id"] in STAGE4B2_LIFECYCLE_ORDER
         ]
-        self.assertEqual(len(lifecycle_results), 4)
+        self.assertEqual(len(lifecycle_results), 3)
         self.assertTrue(all(result["dry_run"] is True for result in lifecycle_results))
 
     def test_unexpected_job_error_records_compact_error_and_stops(self) -> None:

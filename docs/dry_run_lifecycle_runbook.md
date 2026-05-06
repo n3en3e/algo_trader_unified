@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Use this runbook to validate the complete dry-run lifecycle in a temporary or test root. The flow exercises scheduler job wrappers and existing lifecycle helpers only.
+Use this runbook to validate the complete manual dry-run lifecycle in a temporary or test root. The flow exercises explicit job wrappers and existing lifecycle helpers only.
 
 ## Preconditions
 
@@ -20,9 +20,15 @@ python3 -m unittest discover -s algo_trader_unified/tests
 python3 -m unittest algo_trader_unified.tests.test_phase3w_e2e_dry_run_lifecycle
 ```
 
+## Scheduled vs. Manual Operations
+
+The full dry-run lifecycle sequence may still exist for explicit/manual testing. Stage 4B scheduled operations automate only intent-level work: intent submission, TTL expiry sweep, and EOD intent cleanup/cancellation.
+
+Stage 4B scheduled operations do not automate order confirmation / broker-response simulation, fill confirmation / fill simulation, position transitions, or position close finalization. Those deeper lifecycle steps remain manual/explicit until later paper burn-in. Paper/broker execution is not part of Stage 4B.
+
 ## One-Shot Chain Runner
 
-The manual chain runner executes the configured dry-run scheduler jobs once and exits. It does not start a scheduler, install a service, connect to a broker, or fetch market data.
+The manual chain runner executes the configured dry-run lifecycle jobs once and exits. It does not start a scheduler, install a service, connect to a broker, or fetch market data.
 
 Default entry-scan behavior is safe: without an injected test signal provider, the chain skips entry scans and still runs downstream jobs once, which no-op on empty state.
 

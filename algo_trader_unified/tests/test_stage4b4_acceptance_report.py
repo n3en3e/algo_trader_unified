@@ -14,6 +14,8 @@ from algo_trader_unified.config.scheduler import (
     JOB_DRY_RUN_APPLY_POSITION_TRANSITIONS,
     JOB_DRY_RUN_CONFIRM_FILLS,
     JOB_DRY_RUN_CONFIRM_SUBMITTED_ORDERS,
+    JOB_DRY_RUN_EOD_INTENT_CLEANUP,
+    JOB_DRY_RUN_EXPIRE_INTENTS,
     JOB_DRY_RUN_SUBMIT_PENDING_INTENTS,
     JOB_EOD_REVIEW,
     JOB_HEARTBEAT,
@@ -44,9 +46,8 @@ EXPECTED_4A = [
 
 EXPECTED_4B = [
     JOB_DRY_RUN_SUBMIT_PENDING_INTENTS,
-    JOB_DRY_RUN_CONFIRM_SUBMITTED_ORDERS,
-    JOB_DRY_RUN_CONFIRM_FILLS,
-    JOB_DRY_RUN_APPLY_POSITION_TRANSITIONS,
+    JOB_DRY_RUN_EXPIRE_INTENTS,
+    JOB_DRY_RUN_EOD_INTENT_CLEANUP,
 ]
 
 
@@ -114,6 +115,15 @@ class AcceptanceReportTests(unittest.TestCase):
         self.assertTrue(report["acceptance_report"])
         self.assertEqual(report["expected_4a_jobs"], EXPECTED_4A)
         self.assertEqual(report["expected_4b_lifecycle_jobs"], EXPECTED_4B)
+        self.assertNotIn(
+            JOB_DRY_RUN_CONFIRM_SUBMITTED_ORDERS,
+            report["expected_4b_lifecycle_jobs"],
+        )
+        self.assertNotIn(JOB_DRY_RUN_CONFIRM_FILLS, report["expected_4b_lifecycle_jobs"])
+        self.assertNotIn(
+            JOB_DRY_RUN_APPLY_POSITION_TRANSITIONS,
+            report["expected_4b_lifecycle_jobs"],
+        )
         self.assertEqual(report["scheduler"]["jobs_registered_without_triggers"], [])
         self.assertEqual(report["scheduler"]["observation_jobs_registered"], EXPECTED_4A)
         self.assertEqual(

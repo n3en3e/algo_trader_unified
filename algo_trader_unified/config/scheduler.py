@@ -32,6 +32,8 @@ JOB_INTENT_CONFIRMATION = "intent_confirmation"
 JOB_INTENT_FILL_CONFIRMATION = "intent_fill_confirmation"
 JOB_POSITION_TRANSITIONS = "position_transitions"
 JOB_DRY_RUN_SUBMIT_PENDING_INTENTS = "dry_run_submit_pending_intents"
+JOB_DRY_RUN_EXPIRE_INTENTS = "dry_run_expire_intents"
+JOB_DRY_RUN_EOD_INTENT_CLEANUP = "dry_run_eod_intent_cleanup"
 JOB_DRY_RUN_CONFIRM_SUBMITTED_ORDERS = "dry_run_confirm_submitted_orders"
 JOB_DRY_RUN_CONFIRM_FILLS = "dry_run_confirm_fills"
 JOB_DRY_RUN_APPLY_POSITION_TRANSITIONS = "dry_run_apply_position_transitions"
@@ -147,6 +149,25 @@ JOB_SPECS: dict[str, JobSpec] = {
         description="Disabled dry-run pending intent submission cadence",
         trigger_type="interval",
         trigger_kwargs={"seconds": 60},
+        enabled=False,
+    ),
+    JOB_DRY_RUN_EXPIRE_INTENTS: JobSpec(
+        job_id=JOB_DRY_RUN_EXPIRE_INTENTS,
+        description="Disabled dry-run intent TTL expiry cadence",
+        trigger_type="interval",
+        trigger_kwargs={"seconds": 60},
+        enabled=False,
+    ),
+    JOB_DRY_RUN_EOD_INTENT_CLEANUP: JobSpec(
+        job_id=JOB_DRY_RUN_EOD_INTENT_CLEANUP,
+        description="Disabled dry-run EOD intent cleanup cadence",
+        trigger_type="cron",
+        trigger_kwargs={
+            "day_of_week": "mon-fri",
+            "hour": 16,
+            "minute": 10,
+            "timezone": SCHEDULER_TIMEZONE,
+        },
         enabled=False,
     ),
     JOB_DRY_RUN_CONFIRM_SUBMITTED_ORDERS: JobSpec(

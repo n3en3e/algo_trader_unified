@@ -30,7 +30,7 @@ Expected success criteria:
 - `startup_gate.state_store_loadable` is `true`.
 - `scheduler.jobs_registered_without_triggers` is empty.
 - `scheduler.observation_jobs_registered` contains only Stage 4A observation jobs.
-- `scheduler.lifecycle_jobs_registered` contains Stage 4A jobs plus the four Stage 4B lifecycle jobs.
+- `scheduler.lifecycle_jobs_registered` contains Stage 4A jobs plus the three Stage 4B intent-level lifecycle jobs: `JOB_DRY_RUN_SUBMIT_PENDING_INTENTS`, `JOB_DRY_RUN_EXPIRE_INTENTS`, and `JOB_DRY_RUN_EOD_INTENT_CLEANUP`.
 - `safety.broker_calls_enabled`, `market_data_enabled`, `systemd_enabled`, and `paper_live_orders_enabled` are all `false`.
 
 ## Bounded Smoke
@@ -80,8 +80,9 @@ Stale snapshot: `snapshots.account_snapshot_fresh=false` means the latest local 
 
 Digest output: `snapshots.latest_digest_path` points to the latest local digest if one exists. Missing digest output means the daily digest job has not recently written a local file.
 
-Lifecycle disabled/enabled: lifecycle pipeline is disabled by default. Without `--enable-lifecycle-pipeline`, report and foreground modes should show only Stage 4A observation jobs. With the flag, the four dry-run lifecycle jobs are added.
+Lifecycle disabled/enabled: lifecycle pipeline is disabled by default. Without `--enable-lifecycle-pipeline`, report and foreground modes should show only Stage 4A observation jobs. With the flag, only the three Stage 4B intent-level lifecycle jobs are added: `JOB_DRY_RUN_SUBMIT_PENDING_INTENTS`, `JOB_DRY_RUN_EXPIRE_INTENTS`, and `JOB_DRY_RUN_EOD_INTENT_CLEANUP`.
 
+Manual-only lifecycle: `JOB_DRY_RUN_CONFIRM_SUBMITTED_ORDERS`, `JOB_DRY_RUN_CONFIRM_FILLS`, and `JOB_DRY_RUN_APPLY_POSITION_TRANSITIONS` are excluded from scheduled Stage 4B automation.
 ## Boundaries
 
 Stage 4B operations are explicitly:
@@ -90,5 +91,6 @@ Stage 4B operations are explicitly:
 - no market data
 - no systemd changes
 - no paper/live orders
+- no scheduled order confirmation, fill simulation, position transition, or position close finalization
 
 The next boundary is a later paper broker adapter / paper execution stage. Do not add that work while validating Stage 4B dry-run operations.

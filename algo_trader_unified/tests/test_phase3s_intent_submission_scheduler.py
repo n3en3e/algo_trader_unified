@@ -233,6 +233,8 @@ class SchedulerSubmissionConfigTests(unittest.TestCase):
             JOB_INTENT_FILL_CONFIRMATION,
             JOB_POSITION_TRANSITIONS,
             "dry_run_submit_pending_intents",
+            "dry_run_expire_intents",
+            "dry_run_eod_intent_cleanup",
             "dry_run_confirm_submitted_orders",
             "dry_run_confirm_fills",
             "dry_run_apply_position_transitions",
