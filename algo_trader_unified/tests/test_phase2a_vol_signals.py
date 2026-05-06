@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import inspect
+import json
 import re
 import tempfile
 import unittest
@@ -39,9 +40,11 @@ from algo_trader_unified.strategies.vol.signals import (
     SKIP_BLACKOUT_DATE,
     SKIP_EXISTING_POSITION,
     SKIP_HALTED,
+    SKIP_IV_RANK_MISSING,
     SKIP_IV_RANK_BELOW_MIN,
     SKIP_NEEDS_RECONCILIATION,
     SKIP_ORDERREF_MISSING,
+    SKIP_VIX_MISSING,
     SKIP_VIX_GATE,
     has_existing_open_position,
     has_needs_reconciliation,
@@ -104,6 +107,13 @@ class VolCase(unittest.TestCase):
 
     def execution_ledger_text(self) -> str:
         return (self.root / "data/ledger/execution_ledger.jsonl").read_text()
+
+    def execution_events(self) -> list[dict]:
+        return [
+            json.loads(line)
+            for line in self.execution_ledger_text().splitlines()
+            if line
+        ]
 
     def assert_context_schema(self, result) -> None:
         self.assertIn("capital", result.sizing_context)
@@ -249,12 +259,45 @@ class Phase2AVolGateTests(VolCase):
         self.assert_context_schema(result)
         self.assertIn("SIGNAL_SKIPPED", self.execution_ledger_text())
 
+    def test_s02_vix_missing_is_distinct_from_vix_gate(self) -> None:
+        result = self.run_signal(
+            self.engine(S02_CONFIG),
+            vix=None,
+            iv_rank=45.0,
+            order_ref_candidate="S02|P0427XSP|OPEN",
+        )
+        event = self.execution_events()[-1]
+        self.assertFalse(result.should_enter)
+        self.assertEqual(result.skip_reason, SKIP_VIX_MISSING)
+        self.assertIsInstance(event["payload"]["skip_reason"], str)
+        self.assertEqual(event["payload"]["skip_reason"], SKIP_VIX_MISSING)
+        self.assertEqual(event["payload"]["strategy_id"], S02_CONFIG.strategy_id)
+
     def test_iv_rank_skip(self) -> None:
         result = self.run_signal(self.engine(), iv_rank=20.0)
         self.assertFalse(result.should_enter)
         self.assertEqual(result.skip_reason, SKIP_IV_RANK_BELOW_MIN)
         self.assert_context_schema(result)
         self.assertIn("SIGNAL_SKIPPED", self.execution_ledger_text())
+
+    def test_iv_rank_missing_is_distinct_from_iv_rank_below_min(self) -> None:
+        result = self.run_signal(self.engine(), iv_rank=None)
+        event = self.execution_events()[-1]
+        self.assertFalse(result.should_enter)
+        self.assertEqual(result.skip_reason, SKIP_IV_RANK_MISSING)
+        self.assertIsInstance(event["payload"]["skip_reason"], str)
+        self.assertEqual(event["payload"]["skip_reason"], SKIP_IV_RANK_MISSING)
+        self.assertEqual(event["payload"]["strategy_id"], S01_CONFIG.strategy_id)
+
+    def test_signal_skip_priority_preserves_vix_before_iv_rank(self) -> None:
+        result = self.run_signal(
+            self.engine(S02_CONFIG),
+            vix=None,
+            iv_rank=None,
+            order_ref_candidate="S02|P0427XSP|OPEN",
+        )
+        self.assertFalse(result.should_enter)
+        self.assertEqual(result.skip_reason, SKIP_VIX_MISSING)
 
     def test_needs_reconciliation_skip(self) -> None:
         self.state_store.state["positions"].append(
@@ -291,6 +334,7 @@ class Phase2AVolGateTests(VolCase):
         text = self.execution_ledger_text()
         self.assertIn("SIGNAL_GENERATED", text)
         self.assertNotIn("SIGNAL_SKIPPED", text)
+        self.assertEqual(self.execution_events()[-1]["payload"]["strategy_id"], S01_CONFIG.strategy_id)
         self.client.placeOrder.assert_not_called()
 
     def test_signal_events_route_to_execution_ledger(self) -> None:

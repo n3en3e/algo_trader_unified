@@ -21,9 +21,11 @@ from algo_trader_unified.core.skip_reasons import (
     SKIP_EXISTING_POSITION,
     SKIP_HALTED,
     SKIP_IV_RANK_BELOW_MIN,
+    SKIP_IV_RANK_MISSING,
     SKIP_NEEDS_RECONCILIATION,
     SKIP_ORDERREF_MISSING,
     SKIP_VIX_GATE,
+    SKIP_VIX_MISSING,
 )
 from algo_trader_unified.core.state_store import StateStore
 from algo_trader_unified.strategies.base import RiskManagerProtocol
@@ -230,7 +232,14 @@ def evaluate_standard_strangle_signal(
 
     vix_gate_min = config.params.get("vix_gate_min")
     if vix_gate_min not in (None, 0):
-        if signal_input.vix is None or signal_input.vix < float(vix_gate_min):
+        if signal_input.vix is None:
+            return _result(
+                config=config,
+                should_enter=False,
+                skip_reason=SKIP_VIX_MISSING,
+                skip_detail=f"VIX missing for minimum {vix_gate_min}",
+            )
+        if signal_input.vix < float(vix_gate_min):
             return _result(
                 config=config,
                 should_enter=False,
@@ -239,7 +248,14 @@ def evaluate_standard_strangle_signal(
             )
 
     iv_rank_min = float(config.params["iv_rank_min"])
-    if signal_input.iv_rank is None or signal_input.iv_rank < iv_rank_min:
+    if signal_input.iv_rank is None:
+        return _result(
+            config=config,
+            should_enter=False,
+            skip_reason=SKIP_IV_RANK_MISSING,
+            skip_detail=f"IV rank missing for minimum {iv_rank_min:g}",
+        )
+    if signal_input.iv_rank < iv_rank_min:
         return _result(
             config=config,
             should_enter=False,

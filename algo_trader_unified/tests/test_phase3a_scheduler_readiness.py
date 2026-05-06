@@ -39,10 +39,12 @@ from algo_trader_unified.core.skip_reasons import (
     SKIP_ACCOUNT_SNAPSHOT_STALE,
     SKIP_BLACKOUT_DATE,
     SKIP_HALTED,
+    SKIP_IV_RANK_MISSING,
     SKIP_IV_RANK_BELOW_MIN,
     SKIP_IV_BASELINE_MISSING,
     SKIP_NEEDS_RECONCILIATION,
     SKIP_NLV_DEGRADED,
+    SKIP_READINESS_NOT_EVALUATED,
     SKIP_STATESTORE_UNREADABLE,
     SKIP_UNKNOWN_BROKER_EXPOSURE,
 )
@@ -107,6 +109,9 @@ class SkipReasonTests(unittest.TestCase):
             "SKIP_ACCOUNT_SNAPSHOT_STALE",
             "SKIP_STATESTORE_UNREADABLE",
             "SKIP_IV_BASELINE_MISSING",
+            "SKIP_READINESS_FAILED",
+            "SKIP_READINESS_NOT_EVALUATED",
+            "UNKNOWN_SKIP_REASON",
         ):
             self.assertTrue(hasattr(module, name))
 
@@ -129,7 +134,9 @@ class SkipReasonTests(unittest.TestCase):
             "SKIP_HALTED",
             "SKIP_EXISTING_POSITION",
             "SKIP_BLACKOUT_DATE",
+            "SKIP_IV_RANK_MISSING",
             "SKIP_VIX_GATE",
+            "SKIP_VIX_MISSING",
             "SKIP_IV_RANK_BELOW_MIN",
             "SKIP_NEEDS_RECONCILIATION",
             "SKIP_ORDERREF_MISSING",
@@ -142,7 +149,9 @@ class SkipReasonTests(unittest.TestCase):
             SKIP_HALTED,
             "SKIP_EXISTING_POSITION",
             SKIP_BLACKOUT_DATE,
+            "SKIP_IV_RANK_MISSING",
             "SKIP_VIX_GATE",
+            "SKIP_VIX_MISSING",
             "SKIP_IV_RANK_BELOW_MIN",
             SKIP_NEEDS_RECONCILIATION,
             "SKIP_ORDERREF_MISSING",
@@ -494,7 +503,7 @@ class S01VolScanJobTests(TmpCase):
         self.assertEqual(result.detail, "readiness_skipped")
         provider.assert_not_called()
         self.assertEqual(events[-1]["event_type"], "SIGNAL_SKIPPED")
-        self.assertEqual(events[-1]["payload"]["skip_reason"], SKIP_NEEDS_RECONCILIATION)
+        self.assertEqual(events[-1]["payload"]["skip_reason"], SKIP_READINESS_NOT_EVALUATED)
         self.assertEqual(self.order_ledger_text(), "")
         broker.submit_order.assert_not_called()
 
@@ -506,7 +515,9 @@ class S01VolScanJobTests(TmpCase):
         self.assertEqual(result.detail, "signal_skipped")
         self.assertIsInstance(result.signal_result, SignalResult)
         self.assertEqual(events[-1]["event_type"], "SIGNAL_SKIPPED")
-        self.assertEqual(events[-1]["payload"]["skip_reason"], SKIP_IV_RANK_BELOW_MIN)
+        self.assertEqual(events[-1]["payload"]["skip_reason"], SKIP_IV_RANK_MISSING)
+        self.assertIsInstance(events[-1]["payload"]["skip_reason"], str)
+        self.assertEqual(events[-1]["payload"]["strategy_id"], S01_VOL_BASELINE)
         self.assertEqual(self.order_ledger_text(), "")
         broker.submit_order.assert_not_called()
 
@@ -542,6 +553,7 @@ class S01VolScanJobTests(TmpCase):
         self.assertEqual(result.detail, "order_intent_created")
         self.assertIsInstance(result.signal_result, SignalResult)
         self.assertEqual(events[-1]["event_type"], "SIGNAL_GENERATED")
+        self.assertEqual(events[-1]["payload"]["strategy_id"], S01_VOL_BASELINE)
         self.assertEqual(events[-1]["payload"]["event_detail"], "S01_VOL_SIGNAL_GENERATED")
         self.assertNotIn("OPPORTUNITY" + "_IDENTIFIED", json.dumps(events))
         self.assertIn("ORDER_INTENT_CREATED", self.order_ledger_text())

@@ -17,9 +17,13 @@ from algo_trader_unified.core.readiness import ReadinessManager, ReadinessStatus
 from algo_trader_unified.core.scheduler import UnifiedScheduler
 from algo_trader_unified.core.skip_reasons import (
     SKIP_ALREADY_SIGNALED_TODAY,
+    SKIP_IV_RANK_MISSING,
     SKIP_NEEDS_RECONCILIATION,
     SKIP_NLV_DEGRADED,
+    SKIP_READINESS_NOT_EVALUATED,
+    SKIP_VIX_MISSING,
     SKIP_VIX_GATE,
+    UNKNOWN_SKIP_REASON,
 )
 from algo_trader_unified.core.state_store import StateStore
 from algo_trader_unified.jobs import vol
@@ -234,6 +238,20 @@ class S02DryRunVolScanTests(TmpCase):
         self.assertEqual(self.order_path.read_text(encoding="utf-8"), "")
         broker.submit_order.assert_not_called()
 
+    def test_s02_missing_readiness_uses_not_evaluated_reason(self) -> None:
+        provider = mock.Mock(return_value=self.clean_input())
+        result, broker = self.run_s02(signal_context_provider=provider)
+        event = self.execution_events()[-1]
+        self.assertEqual(result.status, "skipped")
+        self.assertEqual(result.detail, "readiness_skipped")
+        provider.assert_not_called()
+        self.assertEqual(event["event_type"], "SIGNAL_SKIPPED")
+        self.assertEqual(event["payload"]["skip_reason"], SKIP_READINESS_NOT_EVALUATED)
+        self.assertIsInstance(event["payload"]["skip_reason"], str)
+        self.assertEqual(event["payload"]["strategy_id"], S02_VOL_ENHANCED)
+        self.assertEqual(self.order_path.read_text(encoding="utf-8"), "")
+        broker.submit_order.assert_not_called()
+
     def test_run_vol_scan_uses_named_default_provider_when_omitted(self) -> None:
         self.set_readiness(S02_VOL_ENHANCED, ready_for_entries=True)
         current_time = datetime(2026, 4, 27, 13, 40, tzinfo=timezone.utc)
@@ -270,6 +288,27 @@ class S02DryRunVolScanTests(TmpCase):
         broker.placeOrder.assert_not_called()
         broker.cancelOrder.assert_not_called()
 
+    def test_s02_signal_skip_distinguishes_missing_vix_and_iv_rank(self) -> None:
+        self.set_readiness(S02_VOL_ENHANCED, ready_for_entries=True)
+        vix_result, _broker = self.run_s02(
+            signal_context_provider=lambda: self.clean_input(vix=None, iv_rank=45.0),
+        )
+        vix_event = self.execution_events()[-1]
+        self.assertEqual(vix_result.signal_result.skip_reason, SKIP_VIX_MISSING)
+        self.assertEqual(vix_event["payload"]["skip_reason"], SKIP_VIX_MISSING)
+        self.assertIsInstance(vix_event["payload"]["skip_reason"], str)
+        self.assertEqual(vix_event["payload"]["strategy_id"], S02_VOL_ENHANCED)
+
+        self.set_readiness(S01_VOL_BASELINE, ready_for_entries=True)
+        iv_result, _broker = self.run_s01(
+            signal_context_provider=lambda: self.clean_input(S01_VOL_BASELINE, iv_rank=None),
+        )
+        iv_event = self.execution_events()[-1]
+        self.assertEqual(iv_result.signal_result.skip_reason, SKIP_IV_RANK_MISSING)
+        self.assertEqual(iv_event["payload"]["skip_reason"], SKIP_IV_RANK_MISSING)
+        self.assertIsInstance(iv_event["payload"]["skip_reason"], str)
+        self.assertEqual(iv_event["payload"]["strategy_id"], S01_VOL_BASELINE)
+
     def test_s02_clean_signal_creates_order_intent(self) -> None:
         self.set_readiness(S02_VOL_ENHANCED, ready_for_entries=True)
         result, broker = self.run_s02(signal_context_provider=lambda: self.clean_input())
@@ -278,6 +317,8 @@ class S02DryRunVolScanTests(TmpCase):
         self.assertEqual(result.detail, "order_intent_created")
         self.assertEqual(events[-1]["event_type"], "SIGNAL_GENERATED")
         self.assertEqual(events[-1]["strategy_id"], S02_VOL_ENHANCED)
+        self.assertEqual(events[-1]["payload"]["strategy_id"], S02_VOL_ENHANCED)
+        self.assertIs(events[-1]["payload"]["dry_run"], True)
         self.assertEqual(events[-1]["payload"]["event_detail"], "S02_VOL_SIGNAL_GENERATED")
         self.assertIn("sizing_context", events[-1]["payload"])
         self.assertIn("risk_context", events[-1]["payload"])
@@ -430,6 +471,29 @@ class UnifiedSchedulerS02Tests(TmpCase):
         )
         self.assertEqual(result.detail, "signal_skipped")
         engine.generate_standard_strangle_signal.assert_called_once()
+
+    def test_injected_skipped_signal_without_reason_uses_unknown_string(self) -> None:
+        self.set_readiness(S02_VOL_ENHANCED, ready_for_entries=True)
+        engine = mock.Mock()
+        engine.generate_standard_strangle_signal.return_value = SignalResult(
+            should_enter=False,
+            skip_reason=None,
+            skip_detail="mocked missing reason",
+            sizing_context={"capital": 90000.0, "allocation_pct": 0.225},
+            risk_context={"execution_mode": "paper_only", "strategy_id": S02_VOL_ENHANCED},
+        )
+        result = self.scheduler().run_job_once(
+            JOB_S02_VOL_SCAN,
+            signal_context_provider=lambda: self.clean_input(),
+            broker=mock.Mock(),
+            engine=engine,
+        )
+        event = self.execution_events()[-1]
+        self.assertEqual(result.detail, "signal_skipped")
+        self.assertEqual(event["event_type"], "SIGNAL_SKIPPED")
+        self.assertEqual(event["payload"]["skip_reason"], UNKNOWN_SKIP_REASON)
+        self.assertIsInstance(event["payload"]["skip_reason"], str)
+        self.assertEqual(event["payload"]["strategy_id"], S02_VOL_ENHANCED)
 
 
 class VolEventTaxonomyTests(TmpCase):

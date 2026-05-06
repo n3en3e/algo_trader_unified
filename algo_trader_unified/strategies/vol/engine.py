@@ -93,6 +93,7 @@ class VolSellingEngine(BaseStrategy):
         )
         event_type = "SIGNAL_GENERATED" if result.should_enter else "SIGNAL_SKIPPED"
         payload = {
+            "strategy_id": self.config.strategy_id,
             "symbol": signal_input.symbol,
             "target_dte": selected_target_dte,
             "vix": signal_input.vix,
@@ -104,7 +105,7 @@ class VolSellingEngine(BaseStrategy):
         if result.should_enter:
             payload["event_detail"] = signal_generated_detail(self.config)
         if not result.should_enter:
-            payload["skip_reason"] = result.skip_reason
+            payload["skip_reason"] = str(result.skip_reason)
             payload["skip_detail"] = result.skip_detail
         if log_to_ledger:
             self.ledger.append(

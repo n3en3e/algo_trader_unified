@@ -11,10 +11,10 @@ from zoneinfo import ZoneInfo
 
 from algo_trader_unified.config.portfolio import S01_VOL_BASELINE, S02_VOL_ENHANCED
 from algo_trader_unified.core.halt_state_utils import halt_is_active
+from algo_trader_unified.core.skip_reasons import UNKNOWN_SKIP_REASON
 
 
 NY_TZ = ZoneInfo("America/New_York")
-UNKNOWN_SKIP_REASON = "UNKNOWN_SKIP_REASON"
 DEFAULT_STRATEGY_IDS = (S01_VOL_BASELINE, S02_VOL_ENHANCED)
 _ACTIVE_INTENT_STATUSES = {"created", "submitted", "confirmed", "filled"}
 _SNAPSHOT_TIMESTAMP_FIELDS = ("timestamp", "captured_at", "snapshot_at", "generated_at")

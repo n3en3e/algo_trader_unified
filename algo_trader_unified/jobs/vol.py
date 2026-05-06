@@ -19,8 +19,10 @@ from algo_trader_unified.core.readiness import ReadinessManager, ReadinessStatus
 from algo_trader_unified.core.skip_reasons import (
     SKIP_ACTIVE_ORDER_INTENT,
     SKIP_ALREADY_SIGNALED_TODAY,
-    SKIP_NEEDS_RECONCILIATION,
+    SKIP_READINESS_FAILED,
+    SKIP_READINESS_NOT_EVALUATED,
     SKIP_STALE_ORDER_INTENT,
+    UNKNOWN_SKIP_REASON,
 )
 from algo_trader_unified.strategies.base import Phase2ARiskManagerStub
 from algo_trader_unified.strategies.vol.engine import VolSellingEngine
@@ -87,11 +89,13 @@ def _readiness_allows_entries(readiness: ReadinessStatus | dict | None) -> bool:
 
 
 def _readiness_skip_reason(readiness: ReadinessStatus | dict | None) -> str:
+    if readiness is None:
+        return SKIP_READINESS_NOT_EVALUATED
     if isinstance(readiness, ReadinessStatus):
-        return readiness.reason or SKIP_NEEDS_RECONCILIATION
-    if isinstance(readiness, dict):
-        return readiness.get("reason") or SKIP_NEEDS_RECONCILIATION
-    return SKIP_NEEDS_RECONCILIATION
+        return readiness.reason or SKIP_READINESS_FAILED
+    if "reason" not in readiness:
+        return SKIP_READINESS_NOT_EVALUATED
+    return readiness.get("reason") or SKIP_READINESS_FAILED
 
 
 def _job_id_for_config(config: StrategyVariantConfig) -> str:
@@ -116,6 +120,7 @@ def _signal_payload(
     signal_result: SignalResult,
 ) -> dict:
     payload = {
+        "strategy_id": config.strategy_id,
         "symbol": signal_input.symbol,
         "target_dte": int(signal_input.target_dte),
         "vix": signal_input.vix,
@@ -127,8 +132,9 @@ def _signal_payload(
     if signal_result.should_enter:
         payload["event_detail"] = signal_generated_detail(config)
     else:
-        payload["skip_reason"] = signal_result.skip_reason
+        payload["skip_reason"] = str(signal_result.skip_reason or UNKNOWN_SKIP_REASON)
         payload["skip_detail"] = signal_result.skip_detail
+    payload["dry_run"] = True
     return payload
 
 
@@ -140,6 +146,7 @@ def _active_order_intent_skip_payload(config: StrategyVariantConfig) -> dict:
         "skip_detail": f"{config.strategy_id} already has an active order intent",
         "gate_name": "vol_order_intent_gate",
         "execution_mode": config.execution_mode,
+        "dry_run": True,
     }
 
 
@@ -172,6 +179,7 @@ def _stale_order_intent_skip_payload(
         "ttl_minutes": ttl_minutes,
         "expired_event_id": expired_event_id,
         "skip_detail": f"{config.strategy_id} stale order intent expired",
+        "dry_run": True,
     }
 
 
@@ -346,6 +354,7 @@ def run_vol_scan(
                 "skip_detail": _readiness_skip_detail(config),
                 "gate_name": "vol_readiness_gate",
                 "execution_mode": config.execution_mode,
+                "dry_run": True,
             },
         )
         return VolScanJobResult(

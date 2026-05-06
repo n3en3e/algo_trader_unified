@@ -39,6 +39,7 @@ from algo_trader_unified.core import scheduler_cadence
 from algo_trader_unified.core.readiness import ReadinessStatus
 from algo_trader_unified.core.skip_reasons import (
     SKIP_READINESS_NOT_EVALUATED,
+    SKIP_READINESS_FAILED,
     SKIP_NLV_DEGRADED,
     SKIP_STATESTORE_UNREADABLE,
 )
@@ -525,6 +526,32 @@ class VolScanSafetyTests(SchedulerCadenceCase):
             self.ledger.events[-1]["payload"]["skip_reason"],
             SKIP_NLV_DEGRADED,
         )
+
+    def test_vol_scan_failed_readiness_without_reason_uses_stable_reason(self) -> None:
+        readiness = ReadinessStatus(
+            strategy_id=S01_VOL_BASELINE,
+            ready_for_entries=False,
+            reason=None,
+            checked_at="2026-05-05T13:35:00+00:00",
+            dirty_state=False,
+            unknown_broker_exposure=False,
+            nlv_degraded=False,
+            halt_active=False,
+            calendar_expired=False,
+            iv_baseline_available=True,
+        )
+        result = scheduler_cadence.run_safe_vol_scan(
+            config=S01_CONFIG,
+            readiness_manager=FakeReadinessManager(readiness=readiness),
+            state_store=self.state_store,
+            ledger=self.ledger,
+        )
+        self.assertEqual(result["detail"], "readiness_skipped")
+        self.assertEqual(
+            self.ledger.events[-1]["payload"]["skip_reason"],
+            SKIP_READINESS_FAILED,
+        )
+        self.assertIs(self.ledger.events[-1]["payload"]["dry_run"], True)
 
 
 class BrokerBoundaryTests(unittest.TestCase):

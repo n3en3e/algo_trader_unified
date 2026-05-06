@@ -29,6 +29,7 @@ from algo_trader_unified.config.scheduler import (
 from algo_trader_unified.config.variants import S01_CONFIG, S02_CONFIG, StrategyVariantConfig
 from algo_trader_unified.core.readiness import ReadinessManager, ReadinessStatus
 from algo_trader_unified.core.skip_reasons import (
+    SKIP_READINESS_FAILED,
     SKIP_READINESS_NOT_EVALUATED,
     SKIP_STATESTORE_UNREADABLE,
 )
@@ -741,6 +742,7 @@ def _append_vol_readiness_skip(
             "skip_detail": f"{config.strategy_id} vol readiness gate blocked entries",
             "gate_name": "vol_readiness_gate",
             "execution_mode": config.execution_mode,
+            "dry_run": True,
         },
     )
 
@@ -755,10 +757,12 @@ def _readiness_allows_entries(readiness: ReadinessStatus | dict) -> bool:
 
 def _readiness_skip_reason(readiness: ReadinessStatus | dict) -> str:
     if isinstance(readiness, ReadinessStatus):
-        return readiness.reason or SKIP_READINESS_NOT_EVALUATED
+        return readiness.reason or SKIP_READINESS_FAILED
     if isinstance(readiness, dict):
-        return readiness.get("reason") or SKIP_READINESS_NOT_EVALUATED
-    return SKIP_READINESS_NOT_EVALUATED
+        if "ready_for_entries" not in readiness:
+            return SKIP_READINESS_NOT_EVALUATED
+        return readiness.get("reason") or SKIP_READINESS_FAILED
+    return SKIP_READINESS_FAILED
 
 
 def _job_id_for_config(config: StrategyVariantConfig) -> str:
