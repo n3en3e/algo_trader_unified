@@ -23,3 +23,26 @@ Safety rules:
 
 A later phase may add an IBKR paper client implementation behind this adapter,
 still protected by explicit mode and wiring gates.
+
+## Stage 4D-5 IBKR Paper Order Mapping
+
+Stage 4D-5 adds IBKR paper order mapping and config validation only. The mapper
+converts a normalized `BrokerOrderRequest` into a deterministic JSON-safe
+`IbkrPaperOrderPlan`; it does not import `ib_insync`, make IBKR calls, qualify
+contracts, submit orders, or wire anything into daemon, scheduler, lifecycle
+jobs, or adapter behavior.
+
+4D-5 is paper-only:
+
+- `trading_mode` must be exactly `PAPER`.
+- Port `4004` is the paper-only gate for this phase.
+- Port `4002`, `LIVE`, and unknown trading modes are rejected.
+- `readonly` must be `False` for future paper submission planning, though this
+  phase still performs no submission.
+- TIF mapping is limited to `DAY` and `GTC`; absent TIF defaults to `DAY`.
+- OPTION contract hints are JSON-only metadata hints (`expiry`, `strike`,
+  `right`), not qualified IBKR contracts.
+
+The next phase may add an injected IBKR paper client behind this mapping. That
+client must remain behind explicit paper gates and must not be wired into
+scheduler or lifecycle execution until an explicit 4E gate.
