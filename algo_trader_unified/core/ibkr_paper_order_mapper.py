@@ -58,37 +58,16 @@ def validate_ibkr_paper_config(config: dict[str, Any]) -> IbkrPaperConfig:
     if not isinstance(config, dict):
         raise ValueError("config must be a dict")
 
-    trading_mode = config.get("trading_mode")
-    if trading_mode != PAPER_TRADING_MODE:
-        if trading_mode == "LIVE":
-            raise ValueError("trading_mode LIVE is rejected for IBKR paper mapping")
-        raise ValueError('trading_mode must be exactly "PAPER"')
-
-    host = config.get("host")
-    if not isinstance(host, str) or not host.strip():
-        raise ValueError("host must be a non-empty string")
-
-    port = config.get("port")
-    if isinstance(port, bool) or not isinstance(port, int):
-        raise ValueError("port must be an int")
-    if port == IBKR_LIVE_PORT:
-        raise ValueError("port 4002 is rejected as likely live")
-    if port != IBKR_PAPER_PORT:
-        raise ValueError("port must be 4004 for IBKR paper mapping")
-
-    client_id = config.get("client_id")
-    if isinstance(client_id, bool) or not isinstance(client_id, int) or client_id <= 0:
-        raise ValueError("client_id must be a positive int")
+    trading_mode = _validate_paper_trading_mode(config, context="IBKR paper mapping")
+    host = _validate_ibkr_host(config)
+    port = _validate_ibkr_paper_port(config, context="IBKR paper mapping")
+    client_id = _validate_ibkr_client_id(config)
 
     readonly = config.get("readonly")
     if readonly is not False:
         raise ValueError("readonly must be False for paper submission planning")
 
-    account_id = config.get("account_id")
-    if account_id is not None:
-        if not isinstance(account_id, str) or not account_id.strip():
-            raise ValueError("account_id must be a non-empty string when provided")
-        account_id = account_id.strip()
+    account_id = _validate_ibkr_account_id(config)
 
     return IbkrPaperConfig(
         host=host.strip(),
@@ -98,6 +77,78 @@ def validate_ibkr_paper_config(config: dict[str, Any]) -> IbkrPaperConfig:
         trading_mode=trading_mode,
         readonly=readonly,
     )
+
+
+def validate_ibkr_paper_readonly_config(config: dict[str, Any]) -> IbkrPaperConfig:
+    if not isinstance(config, dict):
+        raise ValueError("config must be a dict")
+
+    trading_mode = _validate_paper_trading_mode(
+        config,
+        context="IBKR paper read-only preflight",
+    )
+    host = _validate_ibkr_host(config)
+    port = _validate_ibkr_paper_port(
+        config,
+        context="IBKR paper read-only preflight",
+    )
+    client_id = _validate_ibkr_client_id(config)
+    readonly = config.get("readonly")
+    if readonly is not True:
+        raise ValueError("readonly must be True for IBKR paper read-only preflight")
+    account_id = _validate_ibkr_account_id(config)
+
+    return IbkrPaperConfig(
+        host=host.strip(),
+        port=port,
+        client_id=client_id,
+        account_id=account_id,
+        trading_mode=trading_mode,
+        readonly=readonly,
+    )
+
+
+def _validate_paper_trading_mode(config: dict[str, Any], *, context: str) -> str:
+    trading_mode = config.get("trading_mode")
+    if trading_mode != PAPER_TRADING_MODE:
+        if trading_mode == "LIVE":
+            raise ValueError(f"trading_mode LIVE is rejected for {context}")
+        raise ValueError('trading_mode must be exactly "PAPER"')
+    return trading_mode
+
+
+def _validate_ibkr_host(config: dict[str, Any]) -> str:
+    host = config.get("host")
+    if not isinstance(host, str) or not host.strip():
+        raise ValueError("host must be a non-empty string")
+    return host
+
+
+def _validate_ibkr_paper_port(config: dict[str, Any], *, context: str) -> int:
+    port = config.get("port")
+    if isinstance(port, bool) or not isinstance(port, int):
+        raise ValueError("port must be an int")
+    if port == IBKR_LIVE_PORT:
+        raise ValueError("port 4002 is rejected as likely live")
+    if port != IBKR_PAPER_PORT:
+        raise ValueError(f"port must be 4004 for {context}")
+    return port
+
+
+def _validate_ibkr_client_id(config: dict[str, Any]) -> int:
+    client_id = config.get("client_id")
+    if isinstance(client_id, bool) or not isinstance(client_id, int) or client_id <= 0:
+        raise ValueError("client_id must be a positive int")
+    return client_id
+
+
+def _validate_ibkr_account_id(config: dict[str, Any]) -> str | None:
+    account_id = config.get("account_id")
+    if account_id is not None:
+        if not isinstance(account_id, str) or not account_id.strip():
+            raise ValueError("account_id must be a non-empty string when provided")
+        account_id = account_id.strip()
+    return account_id
 
 
 def build_ibkr_paper_order_plan(
