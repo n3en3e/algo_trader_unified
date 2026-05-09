@@ -77,3 +77,44 @@ the actual report reason remains the source of truth for the failure.
 Stage 4F-2 is a manual operator gate before any future real paper submit phase.
 Stage 4F-3 remains separate and must still be explicitly approved before any
 paper submit command or order submission path is added.
+
+## Stage 4F-3 Manual Real Paper Submit
+
+Stage 4F-3 adds one manual, operator-gated real IBKR paper submit command for
+exactly one pre-approved ticket. It combines a Stage 4E-4 paper order ticket
+report, a Stage 4F-2 connection preflight report, explicit acknowledgement
+strings, PAPER/4004 submit config validation, and injected factory/client
+dependencies.
+
+The core report builder does not instantiate IB directly, import `ib_insync`,
+read config.py, read or write ledgers, touch StateStore, request market data,
+qualify contracts, or wire into daemon, scheduler, lifecycle, or live trading.
+If any gate fails, it refuses before calling the IB factory, execution-client
+factory, or submit method.
+
+The manual CLI requires both real-paper allow flags and keeps `--dry-run-only`
+mandatory:
+
+```bash
+python3 -m algo_trader_unified.tools.manual_real_paper_submit \
+  --dry-run-only \
+  --json \
+  --allow-real-ibkr \
+  --allow-real-paper-submit \
+  --ticket-json '{...}' \
+  --preflight-json '{...}' \
+  --ack "I understand this is IBKR PAPER only." \
+  --ack "I understand this will submit one real paper order." \
+  --ack "I understand no live orders are allowed." \
+  --ack "I understand scheduler/lifecycle automation remains disabled." \
+  --ack "I reviewed the ticket and preflight report."
+```
+
+Acknowledgements are exact list items after trimming outer whitespace. A single
+combined string does not satisfy the gate, and extra acknowledgements do not
+replace missing required text.
+
+Stage 4F-3 remains paper-only and single-ticket only. It does not add automated
+paper trading, live order submission, market data, contract qualification,
+scheduler cadence changes, lifecycle execution changes, strategy threshold
+changes, sizing changes, deployment, or systemd edits.
