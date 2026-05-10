@@ -118,3 +118,53 @@ Stage 4F-3 remains paper-only and single-ticket only. It does not add automated
 paper trading, live order submission, market data, contract qualification,
 scheduler cadence changes, lifecycle execution changes, strategy threshold
 changes, sizing changes, deployment, or systemd edits.
+
+## Stage 4F-4 Manual Real Paper Status/Cancel
+
+Stage 4F-4 may add manual, operator-gated status and cancel actions for already
+submitted IBKR paper orders. These actions remain paper-only, dry-run-only from
+the project perspective, and unwired from daemon, scheduler, lifecycle, ledgers,
+StateStore, or automated submission flows.
+
+The tool must not call `submit_order_plan`, submit new orders, request market
+data, qualify contracts, change strategy thresholds, change sizing, or enable
+live trading paths. Its only execution-client actions are status lookup and
+cancel for explicitly supplied broker order ids.
+
+### Manual status gates
+
+- Require `action="status"` and `allow_real_paper_status is True`.
+- Ensure the action strictly aligns with the flags: when `action="status"`,
+  `allow_real_paper_cancel` must be `False` to reject mixed-intent payloads.
+- Require `allow_real_ibkr is True`, PAPER mode, explicit port `4004`, and a
+  non-empty broker order id.
+- Refuse before factory/client creation if any gate fails.
+
+### Manual cancel gates
+
+- Require `action="cancel"` and `allow_real_paper_cancel is True`.
+- Ensure the action strictly aligns with the flags: when `action="cancel"`,
+  `allow_real_paper_status` must be `False` to reject mixed-intent payloads.
+- Require `allow_real_ibkr is True`, PAPER mode, explicit port `4004`, a
+  non-empty broker order id, and exact operator acknowledgements for cancel.
+- Refuse before factory/client creation if any gate fails.
+
+### Failure behavior
+
+Status and cancel failures should be reported in the JSON-safe report without
+crashing the tool boundary. To prevent disconnect failures from masking
+status/cancel exceptions, wrap the `execution_client.disconnect()` call inside
+its own `try`/`except` block within the main `finally` block. Catch the
+disconnect exception, log it to the report's warnings or errors, and allow the
+original result or exception report to return safely.
+
+### Review tasks
+
+- Grep for `disconnect()` and verify the call inside the `finally` block is
+  protected by its own nested `try`/`except`, so a disconnect crash cannot
+  overwrite or mask the primary status/cancel exception.
+- Grep for `submit_order_plan` and verify Stage 4F-4 does not call it.
+- Verify the status and cancel gates enforce mutually exclusive allow flags for
+  the selected action.
+- Verify the tool does not read or write ledgers or StateStore and remains a
+  stateless manual probe/trigger.
