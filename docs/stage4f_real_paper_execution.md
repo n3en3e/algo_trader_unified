@@ -168,3 +168,51 @@ original result or exception report to return safely.
   the selected action.
 - Verify the tool does not read or write ledgers or StateStore and remains a
   stateless manual probe/trigger.
+
+## Stage 4F-5 Manual One-Order Smoke-Test Report
+
+Stage 4F-5 is a runbook and read-only acceptance report for a controlled manual
+one-order IBKR paper smoke test. It does not submit, cancel, poll, reconcile,
+mutate state, read ledgers, write StateStore JSON, connect to IBKR, request
+market data, qualify contracts, or wire anything into daemon, scheduler,
+lifecycle jobs, deployment, or live trading.
+
+The required artifact order is:
+
+1. Stage 4F-2 connection preflight.
+2. Stage 4E-4 paper order ticket.
+3. Stage 4F-3 manual real paper submit.
+4. Stage 4F-4 manual status/cancel follow-up.
+5. Stage 4F-5 smoke-test report.
+
+The smoke-test report validates that the supplied dictionaries are internally
+consistent: the preflight was real-paper read-only and connected, the ticket was
+eligible for future manual submit, the submit report shows exactly one submitted
+paper order, the client order id matches between ticket and submit, any supplied
+status/cancel follow-up matches the submitted broker order id, and no live,
+market-data, contract-qualification, scheduler, or lifecycle flags were enabled.
+
+At least one matching status report is expected. A cancel report is optional and
+is summarized when present. If no cancel report is supplied, the report warns
+that the order may still be open unless a terminal status is present or operator
+notes explicitly document that the paper order is intentionally left open for
+manual follow-up. Operator notes are supplemental only and cannot override
+missing artifacts, failed artifacts, id mismatches, unsafe flags, or unsafe
+errors.
+
+Run the report from injected JSON artifacts:
+
+```bash
+python3 -m algo_trader_unified.tools.stage4f5_smoke_test_report \
+  --dry-run-only \
+  --json \
+  --connection-preflight-json '{...}' \
+  --ticket-json '{...}' \
+  --submit-json '{...}' \
+  --order-control-json '{...}' \
+  --operator-note-json '{"order_intentionally_left_open": false, "manual_observation": "Filled in IBKR paper.", "follow_up_required": false, "cleanup_ticket": null}'
+```
+
+Stage 4F-5 remains evidence review only. Stage 4F-6 will be the final Stage 4F
+acceptance report, and it must still preserve the same manual, paper-only
+boundaries unless a later phase explicitly changes them.
