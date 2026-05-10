@@ -213,6 +213,47 @@ python3 -m algo_trader_unified.tools.stage4f5_smoke_test_report \
   --operator-note-json '{"order_intentionally_left_open": false, "manual_observation": "Filled in IBKR paper.", "follow_up_required": false, "cleanup_ticket": null}'
 ```
 
-Stage 4F-5 remains evidence review only. Stage 4F-6 will be the final Stage 4F
-acceptance report, and it must still preserve the same manual, paper-only
-boundaries unless a later phase explicitly changes them.
+Stage 4F-5 remains evidence review only. Stage 4F-6 is the final Stage 4F
+acceptance report, and it preserves the same manual, paper-only boundaries.
+
+## Stage 4F-6 Acceptance Report
+
+Stage 4F-6 adds a read-only acceptance report for deciding whether Stage 4F is
+complete and whether Stage 4G manual paper lifecycle validation may begin. It
+does not submit, cancel, poll, reconcile, connect to IBKR, instantiate execution
+clients, request market data, qualify contracts, read ledgers, write StateStore,
+wire into daemon/scheduler/lifecycle jobs, deploy, or enable live trading.
+
+Stage 4F is accepted only when the supplied evidence shows:
+
+- Stage 4F-1 real IBKR paper factory/preflight seam passed.
+- Stage 4F-2 real IBKR paper connection preflight passed.
+- Stage 4F-3 manual single-ticket real paper submit passed.
+- Stage 4F-4 manual single-order status/cancel follow-up passed.
+- Stage 4F-5 one-order paper smoke-test report was accepted.
+- The smoke test proved one real IBKR paper order only, with submit and status
+  evidence, and no live, market-data, contract-qualification, scheduler, or
+  lifecycle flags enabled.
+- Required Stage 4F modules are present.
+- Required safety checks remain true.
+- Any supplied state snapshot has no unresolved `NEEDS_RECONCILIATION` records,
+  no active halt, and no explicitly tracked unknown broker exposure.
+
+An accepted Stage 4F means manual real IBKR paper connection was proven, manual
+one-order paper submit was proven, the manual status/cancel workflow was proven,
+the one-order smoke test was accepted, and no automation or live trading was
+enabled.
+
+Run the report with injected smoke-test evidence:
+
+```bash
+python3 -m algo_trader_unified.tools.stage4f_acceptance_report \
+  --dry-run-only \
+  --json \
+  --smoke-test-json '{...}'
+```
+
+Stage 4G is manual paper lifecycle validation. It still does not enable
+scheduler automation or live trading. Stage 4G work should remain behind
+explicit operator gates and use only manual paper status/reconciliation checks
+until a later stage explicitly approves broader automation.
