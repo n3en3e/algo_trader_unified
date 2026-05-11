@@ -14,6 +14,7 @@ This stage is lifecycle intake/reporting only. It does not mutate state, write l
 4. Stage 4F-4 status/cancel reports
 5. Stage 4G-1 lifecycle intake report
 6. Stage 4G-2 lifecycle state preview
+7. Stage 4G-3 state write proposal
 
 The Stage 4G-1 report consumes injected JSON artifacts. It does not read StateStore, read ledgers, write StateStore JSON, or write `.jsonl` ledger files.
 
@@ -74,3 +75,35 @@ python3 -m algo_trader_unified.tools.stage4g2_lifecycle_state_preview \
 ## Next Stage
 
 Stage 4G-3 is the manual state write proposal. It remains behind explicit operator gates. It still does not enable scheduler automation, lifecycle automation, automated paper trading, or live trading.
+
+## Stage 4G-3 Purpose
+
+Stage 4G-3 builds a read-only manual state write proposal from the Stage 4G-2 lifecycle state preview. It answers what StateStore records and ledger events would be proposed in a later explicitly approved phase, and whether the proposal is complete enough to move to a manually gated dry run.
+
+This stage is proposal/reporting only. It does not mutate StateStore, write ledgers, wire daemon jobs, wire scheduler jobs, automate lifecycle transitions, submit orders, cancel orders, poll broker status, request market data, qualify contracts, or enable live trading.
+
+The intended artifact sequence for this step is:
+
+1. Stage 4G-2 lifecycle state preview
+2. Stage 4G-3 state write proposal
+
+The `proposed_state_store_operations` field uses structured dictionaries with an explicit operation name and payload, such as `{"operation": "upsert_order", "payload": {...}}` and `{"operation": "upsert_position", "payload": {...}}`. These operations are proposal-only and are not executed in Stage 4G-3.
+
+The `proposed_ledger_events` field contains proposal-only ledger event payloads. They are not appended to any ledger in this phase. The Stage 4G-3 `write_plan` always disables StateStore writes, ledger writes, lifecycle transitions, daemon wiring, and scheduler wiring.
+
+Stage 4G-3 lists the operator acknowledgements that would be required for a future write phase, including acknowledgement that paper lifecycle state and ledger events would be written later, that the flow remains PAPER only, that scheduler automation remains disabled, and that the proposed payloads were reviewed. These acknowledgements are listed for review but are not enforced yet.
+
+## Stage 4G-3 Example
+
+```bash
+python3 -m algo_trader_unified.tools.stage4g3_state_write_proposal \
+  --dry-run-only \
+  --json \
+  --lifecycle-state-preview-json '{"stage4g2_lifecycle_state_preview":true,"preview":{"available":true,"proposed_lifecycle_state":"paper_order_submitted","proposed_order_record":{"broker_order_id":"9001","client_order_id":"intent-001","strategy_id":"S01_VOL_BASELINE","symbol":"XSP","action":"BUY","quantity":1,"order_type":"LIMIT","status":"submitted"},"proposed_position_record":null,"proposed_ledger_events":[{"event_type":"paper_order_lifecycle_state_preview","timestamp":"2026-05-10T12:30:00+00:00","client_order_id":"intent-001","broker_order_id":"9001"}]},"write_plan":{"state_store_write_enabled":false,"ledger_write_enabled":false,"lifecycle_transition_enabled":false,"daemon_wiring_enabled":false,"scheduler_wiring_enabled":false},"readiness_for_stage4g3":{"ready_to_build_manual_state_write_proposal":true}}' \
+  --state-snapshot-json '{"unresolved_needs_reconciliation_count":0,"active_halt":false}' \
+  --operator-notes-json '{"manual_observation":"reviewed in paper account","cleanup_ticket":null,"operator_initials":"AB","follow_up_required":false}'
+```
+
+## Next Stage
+
+Stage 4G-4 is the manual state write dry run. It remains manually gated, still does not enable scheduler automation, and still does not enable live trading.
