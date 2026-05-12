@@ -107,3 +107,49 @@ python3 -m algo_trader_unified.tools.stage4g3_state_write_proposal \
 ## Next Stage
 
 Stage 4G-4 is the manual state write dry run. It remains manually gated, still does not enable scheduler automation, and still does not enable live trading.
+
+## Stage 4G-4 Purpose
+
+Stage 4G-4 builds a read-only manual state write dry-run report from the Stage 4G-3 state write proposal. It answers what StateStore writes, ledger events, validation checks, lifecycle transition record, and rollback plan would be attempted later if an operator explicitly approved a separate write executor phase.
+
+This stage is dry-run/reporting only. It does not mutate StateStore, write ledgers, wire daemon jobs, wire scheduler jobs, automate lifecycle transitions, submit orders, cancel orders, poll broker status, request market data, qualify contracts, or enable live trading.
+
+The intended artifact sequence for this step is:
+
+1. Stage 4G-3 state write proposal
+2. Stage 4G-4 state write dry run
+
+The `dry_run_operations` field is preview-only. Each operation has `would_execute=false`, a target of `StateStore`, `Ledger`, or `Lifecycle`, and preserves the proposal payload that would be reviewed in the next phase. StateStore order operations appear before StateStore position operations, ledger events preserve proposal order, and the lifecycle transition appears last.
+
+The `rollback_simulation` section is descriptive only. Rollback requires manual StateStore/ledger file reversion using standard system backups, and no automated rollback is supported in this phase. Stage 4G-4 does not generate rollback code, shell commands, SQL, or executable rollback operations.
+
+The Stage 4G-4 `write_plan` always disables StateStore writes, ledger writes, lifecycle transitions, daemon wiring, and scheduler wiring. Missing or malformed proposal artifacts, enabled write flags, unsafe flags, duplicate IDs, unresolved `NEEDS_RECONCILIATION`, active halts, and missing acknowledgements block readiness for Stage 4G-5.
+
+Exact acknowledgements required for future write readiness:
+
+- `I understand this will write paper lifecycle state.`
+- `I understand this will write ledger events.`
+- `I understand this is still PAPER only.`
+- `I understand this does not enable scheduler automation.`
+- `I reviewed the proposed StateStore and ledger payloads.`
+
+Extra acknowledgement text does not compensate for a missing required acknowledgement, and a single combined string does not satisfy the gate.
+
+## Stage 4G-4 Example
+
+```bash
+python3 -m algo_trader_unified.tools.stage4g4_state_write_dry_run \
+  --dry-run-only \
+  --json \
+  --state-write-proposal-json '{"stage4g3_state_write_proposal":true,"proposal":{"available":true,"proposed_state_store_operations":[{"operation":"upsert_order","payload":{"client_order_id":"intent-001","broker_order_id":"9001","symbol":"XSP","paper_only":true}}],"proposed_ledger_events":[{"event_type":"paper_order_lifecycle_state_preview","timestamp":"2026-05-10T12:30:00+00:00","client_order_id":"intent-001","broker_order_id":"9001"}],"proposed_lifecycle_transition":{"transition_to":"paper_order_submitted","proposal_only":true,"enabled":false}},"write_plan":{"state_store_write_enabled":false,"ledger_write_enabled":false,"lifecycle_transition_enabled":false,"daemon_wiring_enabled":false,"scheduler_wiring_enabled":false},"safety_checks":{"no_live_orders":true,"no_market_data":true,"no_contract_qualification":true,"no_scheduler_changes":true,"no_lifecycle_wiring":true,"no_state_mutation":true,"no_ledger_writes":true},"readiness_for_stage4g4":{"ready_to_build_manual_state_write_dry_run":true}}' \
+  --state-snapshot-json '{"unresolved_needs_reconciliation_count":0,"active_halt":false}' \
+  --ack "I understand this will write paper lifecycle state." \
+  --ack "I understand this will write ledger events." \
+  --ack "I understand this is still PAPER only." \
+  --ack "I understand this does not enable scheduler automation." \
+  --ack "I reviewed the proposed StateStore and ledger payloads."
+```
+
+## Next Stage
+
+Stage 4G-5 is the manual state write executor behind explicit operator gates. It still does not enable scheduler automation and still does not enable live trading.
