@@ -153,3 +153,42 @@ python3 -m algo_trader_unified.tools.stage4g4_state_write_dry_run \
 ## Next Stage
 
 Stage 4G-5 is the manual state write executor behind explicit operator gates. It still does not enable scheduler automation and still does not enable live trading.
+
+## Stage 4G-5 Purpose
+
+Stage 4G-5 is the manual paper lifecycle state write executor. It answers whether an explicitly approved Stage 4G-4 dry-run packet can be applied through injected StateStore and ledger writer abstractions only, with deterministic reporting and no automation.
+
+This is the first permitted write phase in Stage 4G, but only after all manual gates pass. The executor requires `allow_state_write=true`, `allow_ledger_write=true`, a valid and ready Stage 4G-4 dry-run packet, clean write-plan and safety flags, and exact operator acknowledgement list items. The acknowledgements use exact string equality after trimming each list item; a single combined acknowledgement string does not pass.
+
+The core executor does not instantiate production StateStore, ledger, IB, execution, scheduler, or lifecycle objects. Writes are allowed only through injected writer abstractions such as `state_store_writer.upsert_order(...)`, `state_store_writer.upsert_position(...)`, and `ledger_writer.append_event(...)`. The optional CLI is conservative and does not instantiate real production writers in this phase.
+
+Partial failure reporting is explicit:
+
+- `applied_operations` lists successful writes in the order they occurred.
+- `skipped_operations` lists abandoned operations after the first failure.
+- `rollback_required=true` means manual rollback using standard backups is required.
+- No automated rollback is supported, and no rollback commands are generated.
+
+Idempotent or duplicate writer responses such as `already_exists` are accepted only when the returned record IDs match the requested `client_order_id` and `broker_order_id` values. Mismatched IDs fail closed and stop execution.
+
+Stage 4G-5 does not submit orders, cancel orders, poll status, call broker APIs, request market data, qualify contracts, execute lifecycle transitions, wire daemon jobs, wire scheduler jobs, automate paper trading, or enable live trading. The lifecycle transition from the dry-run packet is recorded only in the report context and is not executed as a mutation.
+
+## Stage 4G-5 Example
+
+```bash
+python3 -m algo_trader_unified.tools.stage4g5_state_write_executor \
+  --dry-run-only \
+  --json \
+  --state-write-dry-run-json '{"stage4g4_state_write_dry_run":true,"operation_schema_checks":{"operations_structured":true,"recognized_operations":true,"deterministic_operation_order":true},"dry_run_packet":{"available":true,"dry_run_operations":[{"sequence_number":1,"target":"StateStore","operation":"upsert_order","would_execute":false,"payload":{"client_order_id":"intent-001","broker_order_id":"9001","symbol":"XSP","paper_only":true}},{"sequence_number":2,"target":"Ledger","operation":"append_event","would_execute":false,"payload":{"event_type":"paper_order_lifecycle_state_write","timestamp":"2026-05-10T12:30:00+00:00","client_order_id":"intent-001","broker_order_id":"9001"}},{"sequence_number":3,"target":"Lifecycle","operation":"record_lifecycle_transition","would_execute":false,"payload":{"transition_to":"paper_order_submitted","proposal_only":true,"enabled":false}}]},"write_plan":{"state_store_write_enabled":false,"ledger_write_enabled":false,"lifecycle_transition_enabled":false,"daemon_wiring_enabled":false,"scheduler_wiring_enabled":false},"safety_checks":{"no_live_orders":true,"no_market_data":true,"no_contract_qualification":true,"no_scheduler_changes":true,"no_lifecycle_wiring":true,"no_state_mutation":true,"no_ledger_writes":true},"readiness_for_stage4g5":{"ready_to_build_manual_state_write_executor":true}}' \
+  --allow-state-write \
+  --allow-ledger-write \
+  --ack "I understand this will write paper lifecycle state." \
+  --ack "I understand this will write ledger events." \
+  --ack "I understand this is still PAPER only." \
+  --ack "I understand this does not enable scheduler automation." \
+  --ack "I reviewed the proposed StateStore and ledger payloads."
+```
+
+## Next Stage
+
+Stage 4G-6 is the manual lifecycle write acceptance report. It verifies the Stage 4G-5 write report and any manually inspected StateStore and ledger records. It still does not enable scheduler automation and still does not enable live trading.
