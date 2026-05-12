@@ -192,3 +192,49 @@ python3 -m algo_trader_unified.tools.stage4g5_state_write_executor \
 ## Next Stage
 
 Stage 4G-6 is the manual lifecycle write acceptance report. It verifies the Stage 4G-5 write report and any manually inspected StateStore and ledger records. It still does not enable scheduler automation and still does not enable live trading.
+
+## Stage 4G-6 Purpose
+
+Stage 4G-6 builds a read-only manual lifecycle write acceptance report from the Stage 4G-5 executor report. It answers whether the manual paper StateStore and ledger write completed cleanly, whether the applied operations are coherent, whether rollback is unnecessary, and whether the repo is ready to begin Stage 4H controlled automated paper trading launch.
+
+This stage is acceptance/reporting only. It does not mutate StateStore, write ledgers, execute lifecycle transitions, wire daemon jobs, wire scheduler jobs, automate paper trading, submit orders, cancel orders, poll broker status, request market data, qualify contracts, or enable live trading.
+
+The Stage 4G-6 report validates that the Stage 4G-5 executor:
+
+- is present and marked as a Stage 4G-5 executor report;
+- was ready for Stage 4G-6;
+- passed its gates;
+- attempted and completed execution;
+- succeeded for both StateStore and ledger writes;
+- left `rollback_required=false` and `rollback_attempted=false`;
+- reported no executor errors;
+- kept lifecycle transition execution disabled;
+- kept live, market-data, contract-qualification, scheduler, lifecycle, and automation flags disabled.
+
+The `applied_operations` section must contain at least one StateStore operation and at least one ledger operation. Every applied operation must include `sequence_number`, `target`, `operation`, `client_order_id`, `broker_order_id`, and `result`. Every applied operation must share the same `client_order_id` and `broker_order_id`; any mismatch blocks readiness. Operation order must remain deterministic: StateStore order first, StateStore position next when present, and ledger event operations after StateStore operations. Malformed applied-operation entries, including non-dict list items or missing fields, block readiness rather than crashing the report.
+
+Optional post-write StateStore and ledger snapshots are injected as JSON. Missing snapshots warn that manual verification is still required, but do not necessarily block Stage 4H readiness when the executor report itself is complete and clean. If explicit snapshot records are provided, they must match the written client and broker order IDs. Explicit unresolved `NEEDS_RECONCILIATION` counts or active halts in the state snapshot block readiness. Open-position counts alone are not treated as unknown broker exposure.
+
+Accepted Stage 4G means:
+
+- manual StateStore and ledger lifecycle writing was proven through injected writers;
+- no scheduler or lifecycle automation was enabled;
+- no live trading was enabled;
+- the repo may proceed to Stage 4H controlled automated paper trading launch.
+
+Stage 4H is the controlled automated paper trading launch. It should start with read-only automation readiness checks, then enable only one strategy or sleeve behind explicit gates. Stage 4H still does not enable live trading.
+
+## Stage 4G-6 Example
+
+```bash
+python3 -m algo_trader_unified.tools.stage4g6_lifecycle_write_acceptance \
+  --dry-run-only \
+  --json \
+  --state-write-executor-json '{"stage4g5_state_write_executor":true,"gates":{"passed":true},"execution":{"attempted":true,"completed":true,"state_store_write_succeeded":true,"ledger_write_succeeded":true,"lifecycle_transition_executed":false},"applied_operations":[{"sequence_number":1,"target":"StateStore","operation":"upsert_order","client_order_id":"intent-001","broker_order_id":"9001","result":{"status":"ok"}},{"sequence_number":2,"target":"Ledger","operation":"append_event","client_order_id":"intent-001","broker_order_id":"9001","result":{"status":"ok"}}],"skipped_operations":[],"rollback":{"rollback_required":false,"rollback_attempted":false},"write_plan":{"lifecycle_transition_enabled":false,"daemon_wiring_enabled":false,"scheduler_wiring_enabled":false},"safety":{"live_orders_enabled":false,"market_data_enabled":false,"contract_qualification_enabled":false,"scheduler_changes_enabled":false,"lifecycle_wiring_enabled":false,"automated_paper_trading_enabled":false},"readiness_for_stage4g6":{"ready_to_build_manual_lifecycle_write_acceptance_report":true},"errors":[]}' \
+  --state-snapshot-json '{"order_records":[{"client_order_id":"intent-001","broker_order_id":"9001"}],"unresolved_needs_reconciliation_count":0,"active_halt":false}' \
+  --ledger-snapshot-json '{"events":[{"event_type":"paper_order_lifecycle_state_write","client_order_id":"intent-001","broker_order_id":"9001"}],"event_types":["paper_order_lifecycle_state_write"]}'
+```
+
+## Next Stage
+
+Stage 4H is the controlled automated paper trading launch. Begin with read-only automation readiness checks, keep live trading disabled, and enable only one paper strategy or sleeve after explicit 4H gates pass.
