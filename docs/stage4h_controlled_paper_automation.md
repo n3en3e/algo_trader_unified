@@ -89,9 +89,69 @@ The selected strategy is read directly from
 `stage4h2_wiring_preview_report["strategy_selection"]["selected_preview_strategy_id"]`.
 4H-3 does not re-derive that value from a strategy registry snapshot.
 
-Next stage after 4H-3: 4H-4 is the one-strategy automation enablement gate. It
-is still paper-only and still no live trading. 4H-4 may enable only one
-strategy if all explicit gates pass; it must not enable all strategies at once.
+Stage 4H-4 consumes the 4H-3 wiring dry-run report and builds a one-strategy
+automation enablement gate report. It answers whether the dry run proved enough
+to prepare a tightly gated future Stage 4H-5 activation packet for exactly one
+selected strategy or sleeve.
+
+4H-4 is enablement-gate reporting only. It does not actually enable scheduler
+automation, does not actually enable lifecycle automation, does not register
+jobs, does not wire the daemon, does not execute lifecycle transitions, does
+not scan strategies, does not submit orders, does not call the broker, does not
+request market data, does not qualify contracts, does not mutate StateStore,
+does not write ledger events, and does not enable live trading.
+
+The selected strategy is read directly from the Stage 4H-3
+`selected_strategy.selected_preview_strategy_id` field. The activation
+candidate remains one strategy only and paper only. Live trading and
+all-strategy automation remain blocked.
+
+4H-4 requires these exact operator acknowledgements before readiness for 4H-5
+can pass:
+
+- `I understand this enables automated PAPER trading for one strategy only.`
+- `I understand this does not enable live trading.`
+- `I understand this does not enable all strategies.`
+- `I verified risk controls and kill switches are available.`
+- `I verified PAPER broker configuration is active.`
+- `I understand scheduler/lifecycle activation must remain limited to the selected strategy.`
+
+Omitted acknowledgements are treated as an empty list and block readiness
+safely. A single combined string containing the acknowledgement text does not
+pass; each acknowledgement must be supplied as an exact list item after
+whitespace trimming.
+
+A paper broker snapshot is required for readiness. It must confirm PAPER mode,
+must not indicate `paper_trading: false`, must use the paper port convention,
+and must not show live trading or broker submission automation already enabled.
+
+If a state snapshot is supplied, an active halt or unresolved
+`NEEDS_RECONCILIATION` blocks readiness. `active_intents_count > 0` also blocks
+readiness unless `active_intents_safe_for_enablement: true` is explicitly
+supplied, in which case the report may pass the state gate but still emits a
+warning. `open_positions_count` alone is not treated as unknown exposure.
+
+Next stage after 4H-4: 4H-5 is the one-strategy activation executor. It is
+still no live trading. It may enable only the selected strategy in PAPER mode
+if all gates pass immediately before activation.
+
+```bash
+python3 -m algo_trader_unified.tools.stage4h4_one_strategy_enablement_gate \
+  --dry-run-only \
+  --json \
+  --stage4h3-dry-run-json '{"stage4h3_automation_wiring_dry_run_report":true,"selected_strategy":{"selected_preview_strategy_id":"S01_VOL_BASELINE"},"dry_run_packet":{"available":true,"scheduler_dry_run_operations":[{"target_component":"Scheduler","payload":{"strategy_id":"S01_VOL_BASELINE"},"would_execute":false,"would_register":false}],"lifecycle_dry_run_operations":[{"target_component":"LifecycleRouter","payload":{"strategy_id":"S01_VOL_BASELINE"},"would_execute":false}],"ticket_to_paper_submit_dry_run_operations":[{"target_function":"build_ibkr_paper_order_plan","payload":{"strategy_id":"S01_VOL_BASELINE"},"would_execute":false,"would_submit":false}]},"readiness_for_stage4h4":{"ready_to_build_one_strategy_automation_enablement_gate":true,"blockers":[]},"success":true,"errors":[]}' \
+  --state-snapshot-json '{"active_halt":false,"unresolved_needs_reconciliation_count":0,"active_intents_count":0}' \
+  --risk-snapshot-json '{"kill_switch_available":true,"hard_halt_available":true,"daily_loss_limit_available":true,"risk_bypass_enabled":false}' \
+  --scheduler-snapshot-json '{}' \
+  --lifecycle-snapshot-json '{}' \
+  --paper-broker-snapshot-json '{"mode":"PAPER","paper_trading":true,"ibkr_port":4004,"live_trading_enabled":false,"broker_submission_enabled":false}' \
+  --ack "I understand this enables automated PAPER trading for one strategy only." \
+  --ack "I understand this does not enable live trading." \
+  --ack "I understand this does not enable all strategies." \
+  --ack "I verified risk controls and kill switches are available." \
+  --ack "I verified PAPER broker configuration is active." \
+  --ack "I understand scheduler/lifecycle activation must remain limited to the selected strategy."
+```
 
 ```bash
 python3 -m algo_trader_unified.tools.stage4h3_automation_wiring_dry_run \
