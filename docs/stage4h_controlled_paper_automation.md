@@ -65,6 +65,43 @@ use `would_execute: false`.
 Next stage after 4H-2: 4H-3 is automation wiring dry run. It is still no order
 submission and still no live trading.
 
+Stage 4H-3 consumes the 4H-2 automation wiring preview and produces a
+controlled automation wiring dry-run report. It answers what exact one-strategy
+paper automation wiring could later be activated by Stage 4H-4 while proving
+nothing is enabled in 4H-3.
+
+4H-3 is dry-run/reporting only. It does not register scheduler jobs, does not
+wire lifecycle jobs, does not wire the daemon, does not scan strategies, does
+not create real broker tickets, does not submit orders, does not call the
+broker, does not request market data, does not qualify contracts, does not
+mutate StateStore, does not write ledger events, and does not enable live
+trading.
+
+All 4H-3 dry-run operations must have `would_execute: false`. Scheduler dry-run
+operations must also have `would_register: false` and remain disabled. Broker
+or order-path dry-run operations must have `would_submit: false`. Every
+operation includes a `target_function` or `target_component` string plus a
+JSON-safe `payload` dictionary so Stage 4H-4 can map the dry-run packet to real
+function pointers deterministically. 4H-3 never resolves those strings into
+callables and never calls them.
+
+The selected strategy is read directly from
+`stage4h2_wiring_preview_report["strategy_selection"]["selected_preview_strategy_id"]`.
+4H-3 does not re-derive that value from a strategy registry snapshot.
+
+Next stage after 4H-3: 4H-4 is the one-strategy automation enablement gate. It
+is still paper-only and still no live trading. 4H-4 may enable only one
+strategy if all explicit gates pass; it must not enable all strategies at once.
+
+```bash
+python3 -m algo_trader_unified.tools.stage4h3_automation_wiring_dry_run \
+  --dry-run-only \
+  --json \
+  --stage4h2-preview-json '{"stage4h2_automation_wiring_preview_report":true,"strategy_selection":{"selected_preview_strategy_id":"S01_VOL_BASELINE"},"wiring_preview":{"available":true,"proposed_scheduler_wiring_preview":{"jobs":[{"job_id":"stage4h3_dry_run_S01_VOL_BASELINE","strategy_id":"S01_VOL_BASELINE","disabled":true,"would_register":false,"would_execute":false,"paper_only":true}]},"proposed_lifecycle_wiring_preview":{"flows":[{"name":"signal_to_intent","would_execute":false,"paper_only":true}]}},"readiness_for_stage4h3":{"ready_to_build_automation_wiring_dry_run":true,"blockers":[]},"success":true,"errors":[]}' \
+  --risk-snapshot-json '{"kill_switch_available":true,"hard_halt_available":true,"daily_loss_limit_available":true}' \
+  --paper-broker-snapshot-json '{"mode":"PAPER","paper_trading":true,"ibkr_port":4004,"live_trading_enabled":false,"broker_submission_enabled":false}'
+```
+
 ```bash
 python3 -m algo_trader_unified.tools.stage4h2_automation_wiring_preview \
   --dry-run-only \
