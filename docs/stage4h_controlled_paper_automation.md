@@ -135,6 +135,68 @@ Next stage after 4H-4: 4H-5 is the one-strategy activation executor. It is
 still no live trading. It may enable only the selected strategy in PAPER mode
 if all gates pass immediately before activation.
 
+Stage 4H-5 is the one-strategy activation executor. It consumes the 4H-4
+enablement gate report and applies the activation through injected writer
+abstractions only.
+
+4H-5 is the first stage that may perform a write to activate automation, but
+only for one strategy in PAPER mode, and only after all gates pass. The core
+executor requires `allow_activation_write=true`, a valid and ready Stage 4H-4
+dry-run packet, clean safety flags, and exact operator acknowledgement list
+items.
+
+The core executor does not instantiate production StateStore, ledger, IB,
+execution, scheduler, or lifecycle objects. Writes are allowed only through
+injected writer abstractions such as `activation_writer.activate_one_strategy(...)`
+and an optional `audit_writer.append_activation_audit(...)`. The optional CLI is
+conservative and does not instantiate real production writers in this phase.
+
+The `activation_writer` receives only a scoped `activation_payload` dictionary,
+not the full 4H-4 report. This payload preserves the
+`proposed_runtime_guards`, `proposed_monitoring_requirements`, and
+`proposed_kill_switch_requirements` from the 4H-4 report.
+
+Partial failure reporting is explicit. If the activation write succeeds but the
+audit write fails, `rollback_required=true` is set. No automated rollback is
+supported, and no rollback commands are generated.
+
+Stage 4H-5 does not submit orders, cancel orders, poll status, call broker APIs,
+request market data, qualify contracts, execute lifecycle transitions, wire
+daemon jobs, wire scheduler jobs, or enable live trading. Broker submission
+remains separately gated and disabled.
+
+4H-5 requires these exact operator acknowledgements before readiness for 4H-6
+can pass:
+
+- `I understand this activates automated PAPER trading for one strategy only.`
+- `I understand this does not enable live trading.`
+- `I understand this does not enable all strategies.`
+- `I verified PAPER broker configuration is active.`
+- `I verified risk controls and kill switches are active.`
+- `I understand broker order submission remains separately gated.`
+
+Next stage after 4H-5: 4H-6 is the one-strategy activation acceptance report.
+It verifies the activation artifact/state before any scheduled run.
+
+```bash
+python3 -m algo_trader_unified.tools.stage4h5_one_strategy_activation_executor \
+  --dry-run-only \
+  --json \
+  --allow-activation-write \
+  --stage4h4-gate-json '{"stage4h4_one_strategy_enablement_gate_report":true,"selected_strategy":{"selected_strategy_id":"S01_VOL_BASELINE"},"activation_candidate":{"available":true,"one_strategy_only":true,"paper_only":true,"max_enabled_strategy_count":1},"proposed_activation_flags":{"enable_automated_paper_trading_for_selected_strategy":true,"enable_scheduler_for_selected_strategy":true,"enable_lifecycle_for_selected_strategy":true,"enable_broker_submission_for_selected_strategy":false,"enable_live_trading":false,"enable_all_strategies":false},"readiness_for_stage4h5":{"ready_to_build_one_strategy_activation_executor":true},"success":true,"errors":[]}' \
+  --state-snapshot-json '{"active_halt":false,"unresolved_needs_reconciliation_count":0,"active_intents_count":0}' \
+  --risk-snapshot-json '{"kill_switch_available":true,"hard_halt_available":true,"daily_loss_limit_available":true,"risk_bypass_enabled":false}' \
+  --scheduler-snapshot-json '{}' \
+  --lifecycle-snapshot-json '{}' \
+  --paper-broker-snapshot-json '{"mode":"PAPER","paper_trading":true,"ibkr_port":4004,"live_trading_enabled":false,"broker_submission_enabled":false}' \
+  --ack "I understand this activates automated PAPER trading for one strategy only." \
+  --ack "I understand this does not enable live trading." \
+  --ack "I understand this does not enable all strategies." \
+  --ack "I verified PAPER broker configuration is active." \
+  --ack "I verified risk controls and kill switches are active." \
+  --ack "I understand broker order submission remains separately gated."
+```
+
 ```bash
 python3 -m algo_trader_unified.tools.stage4h4_one_strategy_enablement_gate \
   --dry-run-only \
