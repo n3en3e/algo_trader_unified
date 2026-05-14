@@ -178,6 +178,59 @@ can pass:
 Next stage after 4H-5: 4H-6 is the one-strategy activation acceptance report.
 It verifies the activation artifact/state before any scheduled run.
 
+## Stage 4H-6
+
+Stage 4H-6 is a one-strategy activation acceptance report. It consumes the
+Stage 4H-5 activation executor report plus optional read-only activation,
+audit, state, scheduler, lifecycle, risk, and paper broker snapshots. It
+answers whether the one-strategy PAPER activation artifact/state was written
+correctly and whether it is safe to build the first controlled scheduled PAPER
+automation run phase.
+
+4H-6 is acceptance and reporting only. It does not submit orders, cancel
+orders, poll order status, call broker APIs, scan strategies, request market
+data, qualify contracts, mutate StateStore, write ledger events, register
+scheduler jobs, execute lifecycle transitions, modify systemd, enable live
+trading, or enable all strategies.
+
+The report verifies both the top-level 4H-5 `activation_payload` and any
+visible payloads inside `applied_operations`. Both must preserve
+`live_trading_enabled: false` and `broker_submission_enabled: false`. If a
+visible applied operation payload shows either flag enabled, readiness for the
+next phase is blocked because the write path may have mutated a safety flag.
+If applied operation payloads are absent or not dictionaries, the report warns
+and relies on the top-level activation payload and write status.
+
+Activation and audit snapshots are optional but useful. Explicit activation
+snapshot fields must match the selected strategy, remain paper-only, keep one
+enabled strategy, and keep live trading, all-strategy enablement, and broker
+submission disabled. Explicit audit snapshot fields must match the selected
+strategy and Stage 4H-5 source when supplied. Malformed entries inside
+activation/audit arrays are handled safely and do not crash the acceptance
+report.
+
+Broker submission remains separately gated until a later scheduled run phase
+explicitly permits it. Live trading and all-strategy automation remain blocked.
+
+Next phase after 4H-6: first controlled scheduled PAPER automation run. It is
+still no live trading. Immediately before that run, the implementation must
+re-check state, ledger/audit, risk, paper broker config, scheduler, lifecycle,
+and activation artifact snapshots.
+
+```bash
+python3 -m algo_trader_unified.tools.stage4h6_one_strategy_activation_acceptance \
+  --dry-run-only \
+  --json \
+  --stage4h5-executor-json '{"stage4h5_one_strategy_activation_executor_report":true,"selected_strategy":{"selected_strategy_id":"S01_VOL_BASELINE"},"activation_payload":{"selected_strategy_id":"S01_VOL_BASELINE","paper_only":true,"activation_scope":"single_strategy_paper_only","enabled_strategy_count":1,"live_trading_enabled":false,"all_strategies_enabled":false,"broker_submission_enabled":false,"automated_paper_trading_enabled_for_selected_strategy":true,"scheduler_enabled_for_selected_strategy":true,"lifecycle_enabled_for_selected_strategy":true,"required_runtime_guards":[],"required_monitoring":[],"required_kill_switches":[]},"execution":{"activation_write_succeeded":true,"audit_write_attempted":true,"audit_write_succeeded":true,"completed":true},"applied_operations":[{"operation":"activation_write","payload":{"selected_strategy_id":"S01_VOL_BASELINE","paper_only":true,"enabled_strategy_count":1,"live_trading_enabled":false,"broker_submission_enabled":false}}],"skipped_operations":[],"rollback":{"rollback_required":false},"readiness_for_stage4h6":{"ready_to_build_one_strategy_activation_acceptance_report":true},"success":true,"errors":[]}' \
+  --activation-snapshot-json '{"activation_record":{"selected_strategy_id":"S01_VOL_BASELINE","paper_only":true,"enabled_strategy_count":1,"live_trading_enabled":false,"all_strategies_enabled":false,"broker_submission_enabled":false},"active_strategy_ids":["S01_VOL_BASELINE"]}' \
+  --audit-snapshot-json '{"selected_strategy_id":"S01_VOL_BASELINE","source_stage":"4H-5","events":[{"selected_strategy_id":"S01_VOL_BASELINE"}]}' \
+  --state-snapshot-json '{"active_halt":false,"unresolved_needs_reconciliation_count":0,"active_intents_count":0}' \
+  --scheduler-snapshot-json '{}' \
+  --lifecycle-snapshot-json '{}' \
+  --risk-snapshot-json '{"kill_switch_available":true,"hard_halt_available":true,"daily_loss_limit_available":true,"risk_bypass_enabled":false}' \
+  --paper-broker-snapshot-json '{"mode":"PAPER","paper_trading":true,"ibkr_port":4004,"live_trading_enabled":false,"broker_submission_enabled":false}'
+```
+
 ```bash
 python3 -m algo_trader_unified.tools.stage4h5_one_strategy_activation_executor \
   --dry-run-only \
