@@ -86,41 +86,57 @@ fetch market data, qualify contracts, mutate `StateStore`, write ledger events,
 enable live trading, or enable all strategies. Broker submission remains
 separately gated. Live trading and all-strategy automation remain blocked.
 
-## Stage 4I-4 Scheduler/Lifecycle Activation Gate
+## Stage 4I-4 Scheduled Run Activation Gate
 
-Stage 4I-4 is scheduler/lifecycle activation gate reporting only. It consumes
-the accepted Stage 4I-3 scheduled run dry-run report and decides whether a
-future executor phase may build a tightly gated scheduler/lifecycle activation
-path for exactly one selected PAPER strategy.
+Stage 4I-4 is the one-strategy scheduler/lifecycle activation gate. It consumes
+the accepted Stage 4I-3 dry-run report and produces an activation gate report.
+It is reporting only.
 
-Stage 4I-4 validates that the accepted 4I-3 report is ready, reads
-`selected_strategy.selected_strategy_id` using safe dictionary traversal, and
-does not re-select, rank, infer, or add strategies. It also validates the
-4I-3 `dry_run_trace`: missing trace data blocks readiness without crashing, and
-each trace item must be simulated with strict boolean false values for disabled
-actions such as execution, broker submission where supplied, state writes,
-ledger writes, and scheduler registration.
+4I-4 requires these exact operator acknowledgements before readiness for 4I-5:
 
-Safety booleans must be real booleans. Strings such as `"False"` or `"True"`
-do not satisfy a gate that requires the actual values `False` or `True`.
-Operator acknowledgements must be supplied as exact list items; substring
-matching is not used, and one giant string containing all acknowledgement text
-does not pass.
+- `I understand this activates the scheduler and lifecycle for one PAPER strategy only.`
+- `I understand this does not enable live trading.`
+- `I understand this does not enable all strategies.`
+- `I understand this does not enable broker order submission.`
+- `I verified risk controls and kill switches are active.`
+- `I verified PAPER broker configuration is active.`
+- `I verified the market window is correct for the run.`
 
-The report proposes, but does not execute, scheduler and lifecycle activation
-for one selected PAPER strategy in the next phase. It does not submit orders,
-call a broker, poll order status, cancel orders, fetch market data, qualify
-contracts, scan strategies, register scheduler jobs, register lifecycle jobs,
-execute lifecycle transitions, enable live trading, enable all-strategy
-automation, mutate state, or write ledger events. Broker submission remains
-separately gated. Live trading and all-strategy automation remain blocked.
+## Stage 4I-5 Scheduler/Lifecycle Activation Executor
+
+Stage 4I-5 is the one-strategy scheduler/lifecycle activation executor. It
+consumes the accepted Stage 4I-4 activation gate report and applies the
+activation through injected writer abstractions only.
+
+4I-5 is the first stage in 4I that may perform a write to activate scheduler
+and lifecycle automation, but only for one strategy in PAPER mode, and only
+after all gates pass. The core executor requires
+`allow_scheduler_lifecycle_activation=true`, a valid and ready Stage 4I-4
+report, clean safety snapshots, and the exact operator acknowledgements.
+
+The core executor does not instantiate production scheduler, lifecycle, or
+audit objects. Writes are allowed only through injected writer abstractions such
+as `scheduler_activation_writer.activate_scheduler(...)`,
+`lifecycle_activation_writer.activate_lifecycle(...)`, and an optional
+`audit_writer.append_scheduler_lifecycle_activation_audit(...)`.
+
+The activation payloads for the scheduler and lifecycle writers strictly
+hardcode `strategy_scan_execution_enabled: false` and
+`lifecycle_transition_execution_enabled: false`. The `applied_operations` in
+the report include `target` labels (`scheduler_activation`,
+`lifecycle_activation`, `audit`) to support manual rollback review. Partial
+failure is reported transparently, and `rollback_required=true` is set if an
+early write succeeds but a later one fails. No automated rollback is supported.
+
+Stage 4I-5 does not submit orders, call a broker, scan strategies, execute
+lifecycle transitions, enable live trading, or enable all strategies. Broker
+submission remains separately gated until a later scheduled run phase
+explicitly permits it.
 
 ## Next Stage
 
-Stage 4I-5 is the one-strategy scheduler/lifecycle activation executor. It
-still does not enable live trading. Before 4I-5, operators must re-check
-runtime state, the activation artifact, risk controls, paper broker config,
-scheduler state, lifecycle state, and the market window before activation.
+Stage 4I-6 is the one-strategy scheduler/lifecycle activation acceptance
+report. It verifies the activation artifact/state before any scheduled run.
 
 ## Example
 
@@ -151,24 +167,4 @@ python3 -m algo_trader_unified.tools.stage4i3_scheduled_run_dry_run \
   --lifecycle-snapshot-json '{...}' \
   --paper-broker-snapshot-json '{...}' \
   --market-window-snapshot-json '{...}'
-```
-
-```bash
-python3 -m algo_trader_unified.tools.stage4i4_scheduler_lifecycle_activation_gate \
-  --dry-run-only \
-  --json \
-  --stage4i3-dry-run-json '{...}' \
-  --activation-snapshot-json '{...}' \
-  --state-snapshot-json '{...}' \
-  --risk-snapshot-json '{...}' \
-  --scheduler-snapshot-json '{...}' \
-  --lifecycle-snapshot-json '{...}' \
-  --paper-broker-snapshot-json '{...}' \
-  --market-window-snapshot-json '{...}' \
-  --ack "I understand this may allow scheduler/lifecycle activation for one PAPER strategy in the next phase." \
-  --ack "I understand this does not enable live trading." \
-  --ack "I understand this does not enable all strategies." \
-  --ack "I understand broker order submission remains separately gated." \
-  --ack "I verified state, risk, scheduler, lifecycle, paper broker, and market window snapshots." \
-  --ack "I understand strategy scans and orders are not executed in this gate phase."
 ```
