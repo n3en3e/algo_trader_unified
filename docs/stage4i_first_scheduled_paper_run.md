@@ -133,10 +133,56 @@ lifecycle transitions, enable live trading, or enable all strategies. Broker
 submission remains separately gated until a later scheduled run phase
 explicitly permits it.
 
-## Next Stage
+## Stage 4I-6 Scheduler/Lifecycle Activation Acceptance
 
-Stage 4I-6 is the one-strategy scheduler/lifecycle activation acceptance
-report. It verifies the activation artifact/state before any scheduled run.
+Stage 4I-6 is the scheduler/lifecycle activation acceptance report for the
+first controlled scheduled PAPER automation run. It consumes the accepted
+Stage 4I-5 activation executor report and optional read-only scheduler,
+lifecycle, audit, activation, state, risk, paper broker, and market window
+snapshots.
+
+4I-6 is acceptance/reporting only. It verifies that the 4I-5 scheduler and
+lifecycle activation payloads match the selected PAPER strategy, remain scoped
+to a single strategy, and keep `live_trading_enabled`,
+`all_strategies_enabled`, `broker_submission_enabled`,
+`strategy_scan_execution_enabled`, and
+`lifecycle_transition_execution_enabled` false. It also safely validates
+`applied_operations` and `skipped_operations` target labels so malformed
+operation records cannot crash the report.
+
+Optional scheduler and lifecycle activation snapshots are checked only for
+explicit contradictions. Optional audit snapshots may match the selected
+strategy with `selected_strategy_id` at the event root or under nested
+`payload` or `data` dictionaries. Unexpected audit schemas are ignored with
+warnings rather than executed or trusted blindly.
+
+Stage 4I-6 does not directly register APScheduler jobs, execute lifecycle
+transitions, wire into the daemon, call strategy scans, call broker APIs, fetch
+market data, qualify contracts, submit orders, poll order status, or cancel
+orders. Broker submission remains separately gated. Live trading and
+all-strategy automation remain blocked.
+
+If accepted, Stage 4I is complete. The next decision point is whether to
+proceed to the controlled scheduled PAPER operation / first actual scheduled
+run path. That path is still PAPER only: no live trading, and broker submission
+remains its own explicit phase.
+
+```bash
+python3 -m algo_trader_unified.tools.stage4i6_scheduler_lifecycle_activation_acceptance \
+  --dry-run-only \
+  --json \
+  --stage4i5-executor-json '{...}' \
+  --scheduler-activation-snapshot-json '{...}' \
+  --lifecycle-activation-snapshot-json '{...}' \
+  --audit-snapshot-json '{...}' \
+  --activation-snapshot-json '{...}' \
+  --state-snapshot-json '{...}' \
+  --risk-snapshot-json '{...}' \
+  --scheduler-snapshot-json '{...}' \
+  --lifecycle-snapshot-json '{...}' \
+  --paper-broker-snapshot-json '{...}' \
+  --market-window-snapshot-json '{...}'
+```
 
 ## Example
 
