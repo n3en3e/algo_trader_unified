@@ -119,8 +119,31 @@ dry-run operation.
 
 ## Stage 4J-3
 
-Stage 4J-3 is the controlled scheduled PAPER operation dry run. It is still not live trading, and
-broker submission remains its own explicit phase.
+Stage 4J-3 is the controlled scheduled PAPER operation dry run/report. It consumes the accepted
+Stage 4J-2 operation plan and simulates the full planned operation flow without executing anything.
+It answers what would be checked, what remains disabled, what steps would be simulated, and what
+evidence is needed before allowing an actual selected-strategy operation phase.
+
+The Stage 4J-3 report builds `dry_run_trace` directly from
+`operation_plan.proposed_operation_flow`. The trace preserves the Stage 4J-2 plan order exactly and
+keeps every step in `status: "simulated"`. It does not resolve target component names into
+callables, and it does not call target components.
+
+Every `dry_run_trace` item keeps `input_payload` and `simulated_result` as native dictionaries. They
+are not `json.dumps` strings and are not double-serialized. Simulated results use exact flat
+placeholder keys, such as `ticket_placeholder`, `intent_placeholder`,
+`market_data_placeholder`, and `broker_submission_placeholder`; placeholders are not wrapped in
+nested dictionaries.
+
+Stage 4J-3 explicitly performs no direct scheduler registration, no lifecycle execution, no broker
+calls, no order submission, no strategy scan, no market data fetch, no contract qualification, no
+state mutation, no ledger write, no production deployment, and no live trading. Broker submission
+remains separately gated. Live trading and all-strategy automation remain blocked.
+`strategy_scan_execution_enabled` and `lifecycle_transition_execution_enabled` remain disabled in
+Stage 4J-3.
+
+The next stage is Stage 4J-4: the controlled scheduled PAPER operation execution gate. Stage 4J-4 is
+still not live trading, and broker submission remains its own explicit phase.
 
 ## Example
 
@@ -137,4 +160,11 @@ python3 -m algo_trader_unified.tools.stage4j2_controlled_paper_operation_plan \
   --json \
   --stage4j1-readiness-json '{"dry_run": true, "stage4j1_controlled_paper_operation_readiness_report": true, "selected_strategy": {"selected_strategy_id": "S01", "paper_only": true, "one_strategy_only": true}, "payload_checks": {"broker_submission_disabled": true, "strategy_scan_execution_disabled": true, "lifecycle_transition_execution_disabled": true, "market_data_disabled": true, "contract_qualification_disabled": true}, "safety_checks": {"no_live_trading": true, "no_all_strategy_enablement": true, "no_broker_submission_enabled": true, "no_market_data": true, "no_contract_qualification": true, "no_order_submission": true, "no_strategy_scan_execution": true, "no_lifecycle_transition_execution": true, "no_direct_scheduler_registration": true, "no_direct_lifecycle_execution": true, "no_state_write": true, "no_ledger_write": true}, "readiness_for_stage4j2": {"ready_to_build_controlled_paper_operation_plan": true}, "success": true, "errors": [], "warnings": []}' \
   --operation-window-config-json '{"cadence": "once", "dry_run_only": true}'
+```
+
+```bash
+python3 -m algo_trader_unified.tools.stage4j3_controlled_paper_operation_dry_run \
+  --dry-run-only \
+  --json \
+  --stage4j2-plan-json '{"dry_run": true, "stage4j2_controlled_paper_operation_plan_report": true, "selected_strategy": {"selected_strategy_id": "S01", "paper_only": true, "one_strategy_only": true}, "payload_checks": {"broker_submission_disabled": true, "strategy_scan_execution_disabled": true, "lifecycle_transition_execution_disabled": true, "market_data_disabled": true, "contract_qualification_disabled": true}, "safety_checks": {"no_live_trading": true, "no_all_strategy_enablement": true, "no_broker_submission_enabled": true, "no_market_data": true, "no_contract_qualification": true, "no_order_submission": true, "no_strategy_scan_execution": true, "no_lifecycle_transition_execution": true, "no_direct_scheduler_registration": true, "no_direct_lifecycle_execution": true, "no_state_write": true, "no_ledger_write": true}, "operation_plan": {"available": true, "operation_id": "s01_once_2026_05_16", "controlled_operation_scope": "single_strategy_controlled_scheduled_paper_operation", "proposed_operation_window": {"operation_id": "s01_once_2026_05_16", "dry_run_only": true, "would_register_scheduler": false, "would_execute_operation": false, "would_submit_orders": false, "paper_only": true, "live_trading_enabled": false}, "proposed_operation_flow": [{"sequence_number": 1, "stage": "pre_operation_snapshot_check", "target_component": "read_only_snapshot_inputs", "payload": {"operation_id": "s01_once_2026_05_16", "selected_strategy_id": "S01", "stage": "pre_operation_snapshot_check", "preview_only": true}, "would_execute": false, "would_call_strategy": false, "would_fetch_market_data": false, "would_qualify_contracts": false, "would_create_intent": false, "would_create_ticket": false, "would_submit_order": false, "would_write_state": false, "would_write_ledger": false, "paper_only": true, "live_trading_enabled": false}], "proposed_post_operation_checks": []}, "readiness_for_stage4j3": {"ready_to_build_controlled_paper_operation_dry_run": true}, "success": true, "errors": [], "warnings": []}'
 ```
