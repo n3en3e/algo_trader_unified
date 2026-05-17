@@ -39,13 +39,25 @@ The report may say the system is ready to build the 4K-2 plan, but it must still
 
 Stage 4K-2 is the market data and contract qualification plan. It should remain a plan-only phase until a later explicit controlled execution gate permits carefully scoped market data and contract qualification behavior.
 
+## Stage 4K-2 Purpose
+
+Stage 4K-2 is plan and reporting only. It consumes pdmtef u
+It does not fetch market data, qualify contracts, call strategy code, create intents or tickets, submit orders, write state, or write ledger entries. It validates the 4K-1 report, the proposed 4K scope, and optional snapshots for capabilities, requirements, state, risk, scheduler, lifecycle, paper broker, and market window.
+s Enablire strict native booleans; stringified values such as `"True"` or `"False"` are rejected.
+e native JSON-safe dictionaries, not serialized strings.
+
+The next phase after a clean 4K-2 report is Stage 4K-3, the market data and contract qualification dry run.
 ## Example
 
-```bash
-python3 -m algo_trader_unified.tools.stage4k1_market_data_contract_readiness \
-  --dry-run-only \
-  --json \
+python3 -m algo_trader_unified.tools.stage4k1_market_da-n
   --stage4j6-acceptance-json '{"dry_run": true, "stage4j6_controlled_paper_operation_acceptance_report": true, "selected_strategy": {"selected_strategy_id": "S01", "paper_only": true, "one_strategy_only": true}, "operation": {"operation_id": "s01_once_2026_05_16", "operation_scope": "single_strategy_controlled_paper_operation_acceptance", "paper_only": true, "live_trading_enabled": false, "broker_submission_enabled": false}, "executor_acceptance": {"accepted": true}, "boundary_checks": {"no_market_data_requested": true, "no_contracts_qualified": true, "no_intents_created": true, "no_tickets_created": true, "no_orders_submitted": true, "no_state_written": true, "no_ledger_written": true, "no_live_trading": true, "no_all_strategy_enablement": true, "no_broker_submission": true}, "safety_checks": {"no_live_trading": true, "no_all_strategy_enablement": true, "no_broker_submission_enabled": true, "no_market_data": true, "no_contract_qualification": true, "no_order_submission": true, "no_intent_creation": true, "no_ticket_creation": true, "no_state_write": true, "no_ledger_write": true}, "readiness_for_stage4j_complete_or_next_gate": {"stage4j_complete": true, "ready_for_next_explicit_gate": true, "recommended_next_gate": "stage4k_market_data_and_contract_qualification_gate"}, "success": true, "errors": [], "warnings": []}' \
   --market-data-capability-snapshot-json '{"selected_strategy_id": "S01", "capabilities": {"market_data_provider_available": true, "paper_market_data_mode": true, "market_data_currently_enabled": false, "reqMktData_enabled": false}}' \
   --contract-qualification-capability-snapshot-json '{"selected_strategy_id": "S01", "config": {"contract_qualification_provider_available": true, "contract_qualification_currently_enabled": false, "qualifyContracts_enabled": false, "reqContractDetails_enabled": false}}'
+```
+
+```bash
+python3 -m algo_trader_unified.tools.stage4k2_market_data_contract_plan \
+  --dry-run-only \
+  --json \
+  --stage4k1-readiness-json '{...}'
 ```
