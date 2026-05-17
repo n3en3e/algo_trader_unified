@@ -43,7 +43,48 @@ The reports may say the system is ready to build the next explicit gate, but the
 
 ## Next Phase
 
-Stage 4K-4 is the market data and contract qualification execution gate. It is the next gate after a clean 4K-3 dry-run report.
+Stage 4K-4 is the market data and contract qualification execution gate. It consumes the accepted Stage 4K-3 dry-run report and produces a read-only permission packet for Stage 4K-5.
+
+Stage 4K-4 is execution-gate/reporting only. It does not fetch market data, qualify contracts, call `request_controlled_market_data`, call `qualify_controlled_contracts`, call strategy scan/run methods, create intents or tickets, submit orders, write state, write ledger entries, register scheduler jobs, execute lifecycle transitions, or call direct IBKR methods such as `reqMktData`, `qualifyContracts`, or `reqContractDetails`.
+
+The gate may permit Stage 4K-5 to call injected controlled provider abstractions only. Market-data-only, contract-qualification-only, and combined provider payload plans are valid as long as the non-present side remains disabled. Provider payload list extraction uses safe `dict.get(..., [])` traversal and treats present `None` lists as empty lists, so a missing or `None` side blocks only when both provider payload lists are empty after normalization.
+
+Stage 4K-4 validates the Stage 4K-3 `dry_run_trace` with strict native booleans. Required disabled flags must be native `false`; string values such as `"False"` are rejected and do not pass as disabled flags.
+
+The proposed Stage 4K-5 payload uses:
+
+- `allow_controlled_market_data_provider_call`
+- `allow_controlled_contract_qualification_provider_call`
+- `allow_direct_reqMktData: false`
+- `allow_direct_qualifyContracts: false`
+- `allow_direct_reqContractDetails: false`
+- `allow_strategy_scan: false`
+- `allow_intent_creation: false`
+- `allow_ticket_creation: false`
+- `allow_order_submission: false`
+- `allow_broker_submission: false`
+- `allow_state_write: false`
+- `allow_ledger_write: false`
+- `live_trading_enabled: false`
+- `all_strategies_enabled: false`
+
+Stale Stage 4J executor fields are not part of Stage 4K-4 or Stage 4K-5:
+
+- `proposed_execution_permissions_for_4J5`
+- `may_call_strategy_next_phase`
+- `may_build_executor_next_phase`
+- `may_fetch_market_data_next_phase`
+
+Required operator acknowledgements are exact strings:
+
+- `ACK_4K4_MARKET_DATA_AND_CONTRACT_GATE_ONLY`
+- `ACK_NO_ORDER_SUBMISSION`
+- `ACK_NO_BROKER_SUBMISSION`
+- `ACK_NO_STATE_OR_LEDGER_WRITES`
+- `ACK_LIVE_TRADING_DISABLED`
+- `ACK_SINGLE_STRATEGY_ONLY`
+
+Broker submission remains separately gated. Intents, tickets, state writes, and ledger writes remain separately gated. Live trading and all-strategy automation remain blocked. The next phase is Stage 4K-5: the controlled market data and contract qualification executor.
 
 ## Examples
 
@@ -68,6 +109,25 @@ python3 -m algo_trader_unified.tools.stage4k3_market_data_contract_dry_run \
   --dry-run-only \
   --json \
   --stage4k2-plan-json '{...}' \
+  --state-snapshot-json '{...}' \
+  --risk-snapshot-json '{...}' \
+  --scheduler-snapshot-json '{...}' \
+  --lifecycle-snapshot-json '{...}' \
+  --paper-broker-snapshot-json '{...}' \
+  --market-window-snapshot-json '{...}'
+```
+
+```bash
+python3 -m algo_trader_unified.tools.stage4k4_market_data_contract_execution_gate \
+  --dry-run-only \
+  --json \
+  --stage4k3-dry-run-json '{...}' \
+  --ack ACK_4K4_MARKET_DATA_AND_CONTRACT_GATE_ONLY \
+  --ack ACK_NO_ORDER_SUBMISSION \
+  --ack ACK_NO_BROKER_SUBMISSION \
+  --ack ACK_NO_STATE_OR_LEDGER_WRITES \
+  --ack ACK_LIVE_TRADING_DISABLED \
+  --ack ACK_SINGLE_STRATEGY_ONLY \
   --state-snapshot-json '{...}' \
   --risk-snapshot-json '{...}' \
   --scheduler-snapshot-json '{...}' \
