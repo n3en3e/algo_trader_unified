@@ -191,6 +191,66 @@ Stage 4J-5 is the controlled scheduled PAPER operation executor. It still does n
 trading or broker submission, and market data plus contract qualification remain their own explicit
 future gates.
 
+## Stage 4J-5
+
+Stage 4J-5 is the first controlled selected-strategy PAPER operation executor shell. It consumes
+the accepted Stage 4J-4 execution gate and may call only an injected
+`selected_strategy_operation_runner.run_controlled_paper_operation(payload)` abstraction after all
+gates pass.
+
+The executor does not directly import or call real strategy scan/run methods. It does not fetch
+market data, qualify contracts, create intents or tickets, submit orders, write state, write ledger,
+register scheduler jobs, execute lifecycle transitions, instantiate broker clients, or enable live
+trading or all-strategy automation. Broker submission remains separately gated. Market data and
+contract qualification remain separately gated.
+
+The runner receives only the deterministic `controlled_operation_payload`; it does not receive the
+full Stage 4J-4 report or full snapshots. Runner output must remain JSON-safe and report-only:
+PAPER only, one strategy only, no market data, no contract qualification, no intent or ticket
+creation, no order submission, no state write, no ledger write, no live trading, no all-strategy
+enablement, and no broker submission. A runner output of `None` is treated as an empty output and
+then fails normal validation without crashing. Runner exceptions are captured as flat JSON-safe
+strings such as `RuntimeError: message`; raw exception objects and tracebacks are not included.
+
+Stage 4J-6 is the controlled scheduled PAPER operation acceptance report. It is still not live
+trading and still does not enable broker submission. Market data, contract qualification,
+intents/tickets, and state/ledger writes remain their own explicit gates.
+
+## Example
+
+```bash
+python3 -m algo_trader_unified.tools.stage4j5_controlled_paper_operation_executor \
+  --dry-run-only \
+  --json \
+  --allow-controlled-paper-operation-execution \
+  --stage4j4-gate-json '{"dry_run": true, "stage4j4_controlled_paper_operation_execution_gate_report": true, "selected_strategy": {"selected_strategy_id": "S01", "paper_only": true, "one_strategy_only": true}, "operation": {"operation_id": "s01_once_2026_05_16", "operation_scope": "single_strategy_controlled_scheduled_paper_operation", "paper_only": true, "live_trading_enabled": false, "broker_submission_enabled": false}, "execution_gate": {"ready_for_4J5": true}, "proposed_execution_permissions_for_4J5": {"may_build_executor_next_phase": true, "may_call_strategy_next_phase": true, "may_fetch_market_data_next_phase": false, "may_qualify_contracts_next_phase": false, "may_create_intent_next_phase": false, "may_create_ticket_next_phase": false, "may_submit_order_next_phase": false, "may_write_state_next_phase": false, "may_write_ledger_next_phase": false, "live_trading_enabled": false, "all_strategies_enabled": false, "broker_submission_enabled": false}, "safety_checks": {"no_live_trading": true, "no_all_strategy_enablement": true, "no_broker_submission_enabled": true, "no_market_data": true, "no_contract_qualification": true, "no_order_submission": true, "no_state_write": true, "no_ledger_write": true}, "readiness_for_stage4j5": {"ready_to_build_controlled_paper_operation_executor": true}, "success": true, "errors": [], "warnings": []}'
+```
+
+## Stage 4J-5
+
+Stage 4J-5 is the first controlled selected-strategy PAPER operation executor shell. It consumes
+the accepted Stage 4J-4 execution gate and may call only an injected
+`selected_strategy_operation_runner.run_controlled_paper_operation(payload)` abstraction after all
+gates pass.
+
+The executor does not directly import or call real strategy scan/run methods. It does not fetch
+market data, qualify contracts, create intents or tickets, submit orders, write state, write ledger,
+register scheduler jobs, execute lifecycle transitions, instantiate broker clients, or enable live
+trading or all-strategy automation. Broker submission remains separately gated. Market data and
+contract qualification remain separately gated.
+
+The runner receives only the deterministic `controlled_operation_payload`; it does not receive the
+full Stage 4J-4 report or full snapshots. Runner output must remain JSON-safe and report-only:
+PAPER only, one strategy only, no market data, no contract qualification, no intent or ticket
+creation, no order submission, no state write, no ledger write, no live trading, no all-strategy
+enablement, and no broker submission. A runner output of `None` is treated as an empty output and
+then fails normal validation without crashing. Runner exceptions are captured as flat JSON-safe
+strings such as `RuntimeError: message`; raw exception objects and tracebacks are not included.
+
+Stage 4J-6 is the controlled scheduled PAPER operation acceptance report. It is still not live
+trading and still does not enable broker submission. Market data, contract qualification,
+intents/tickets, and state/ledger writes remain their own explicit gates.
+
 ## Example
 
 ```bash
@@ -227,4 +287,12 @@ python3 -m algo_trader_unified.tools.stage4j4_controlled_paper_operation_executi
   --ack "I understand market data and contract qualification remain separately gated." \
   --ack "I verified state, risk, scheduler, lifecycle, paper broker, and market window snapshots." \
   --ack "I understand this gate phase does not run strategy code or place orders."
+```
+
+```bash
+python3 -m algo_trader_unified.tools.stage4j5_controlled_paper_operation_executor \
+  --dry-run-only \
+  --json \
+  --allow-controlled-paper-operation-execution \
+  --stage4j4-gate-json '{"dry_run": true, "stage4j4_controlled_paper_operation_execution_gate_report": true, "selected_strategy": {"selected_strategy_id": "S01", "paper_only": true, "one_strategy_only": true}, "operation": {"operation_id": "s01_once_2026_05_16", "operation_scope": "single_strategy_controlled_scheduled_paper_operation", "paper_only": true, "live_trading_enabled": false, "broker_submission_enabled": false}, "execution_gate": {"ready_for_4J5": true}, "proposed_execution_permissions_for_4J5": {"may_build_executor_next_phase": true, "may_call_strategy_next_phase": true, "may_fetch_market_data_next_phase": false, "may_qualify_contracts_next_phase": false, "may_create_intent_next_phase": false, "may_create_ticket_next_phase": false, "may_submit_order_next_phase": false, "may_write_state_next_phase": false, "may_write_ledger_next_phase": false, "live_trading_enabled": false, "all_strategies_enabled": false, "broker_submission_enabled": false}, "safety_checks": {"no_live_trading": true, "no_all_strategy_enablement": true, "no_broker_submission_enabled": true, "no_market_data": true, "no_contract_qualification": true, "no_order_submission": true, "no_state_write": true, "no_ledger_write": true}, "readiness_for_stage4j5": {"ready_to_build_controlled_paper_operation_executor": true}, "success": true, "errors": [], "warnings": []}'
 ```
