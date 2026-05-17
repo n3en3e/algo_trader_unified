@@ -226,6 +226,40 @@ python3 -m algo_trader_unified.tools.stage4j5_controlled_paper_operation_executo
   --stage4j4-gate-json '{"dry_run": true, "stage4j4_controlled_paper_operation_execution_gate_report": true, "selected_strategy": {"selected_strategy_id": "S01", "paper_only": true, "one_strategy_only": true}, "operation": {"operation_id": "s01_once_2026_05_16", "operation_scope": "single_strategy_controlled_scheduled_paper_operation", "paper_only": true, "live_trading_enabled": false, "broker_submission_enabled": false}, "execution_gate": {"ready_for_4J5": true}, "proposed_execution_permissions_for_4J5": {"may_build_executor_next_phase": true, "may_call_strategy_next_phase": true, "may_fetch_market_data_next_phase": false, "may_qualify_contracts_next_phase": false, "may_create_intent_next_phase": false, "may_create_ticket_next_phase": false, "may_submit_order_next_phase": false, "may_write_state_next_phase": false, "may_write_ledger_next_phase": false, "live_trading_enabled": false, "all_strategies_enabled": false, "broker_submission_enabled": false}, "safety_checks": {"no_live_trading": true, "no_all_strategy_enablement": true, "no_broker_submission_enabled": true, "no_market_data": true, "no_contract_qualification": true, "no_order_submission": true, "no_state_write": true, "no_ledger_write": true}, "readiness_for_stage4j5": {"ready_to_build_controlled_paper_operation_executor": true}, "success": true, "errors": [], "warnings": []}'
 ```
 
+## Stage 4J-6
+
+Stage 4J-6 is the controlled scheduled PAPER operation acceptance report. It is acceptance and
+reporting only. It consumes the accepted Stage 4J-5 executor report and determines whether the
+first selected-strategy PAPER operation shell ran through the injected abstraction while preserving
+all required safety boundaries.
+
+4J-6 does not call the runner, call strategy code, fetch market data, qualify contracts, create
+intents or tickets, submit orders, write state or ledger, register scheduler jobs, execute lifecycle
+transitions, instantiate broker clients, enable live trading, or enable all-strategy automation.
+Broker submission remains separately gated.
+
+The report safely validates `controlled_operation_payload` with dictionary access and requires it to
+be a native dict, not `None`, a list, or a serialized JSON string. It also validates
+`execution.runner_result` as a native JSON-safe dict, not a serialized string. Runner safety fields
+such as `market_data_requested`, `contracts_qualified`, `orders_submitted`, `state_written`,
+`ledger_written`, `live_trading_enabled`, `all_strategies_enabled`, and
+`broker_submission_enabled` must be native booleans. String values such as `"False"` are rejected.
+
+Accepted runner statuses are `completed_report_only`, `skipped_no_signal`, and `blocked_by_gate`.
+The latter two may be accepted only with warnings and only when no unsafe side effects occurred.
+4J completion means the selected-strategy executor shell path is validated. It does not mean full
+paper trading is enabled. Market data and contract qualification remain separately gated, and
+intents, tickets, state writes, and ledger writes remain separately gated.
+
+The deterministic next gate is Stage 4K, the market data and contract qualification gate.
+
+```bash
+python3 -m algo_trader_unified.tools.stage4j6_controlled_paper_operation_acceptance \
+  --dry-run-only \
+  --json \
+  --stage4j5-executor-json '{"dry_run": false, "stage4j5_controlled_paper_operation_executor_report": true, "selected_strategy": {"selected_strategy_id": "S01", "paper_only": true, "one_strategy_only": true}, "operation": {"operation_id": "s01_once_2026_05_16", "operation_scope": "single_strategy_controlled_paper_operation_executor", "paper_only": true, "live_trading_enabled": false, "broker_submission_enabled": false}, "controlled_operation_payload": {"selected_strategy_id": "S01", "operation_id": "s01_once_2026_05_16", "paper_only": true, "one_strategy_only": true, "allow_market_data": false, "allow_contract_qualification": false, "allow_intent_creation": false, "allow_ticket_creation": false, "allow_order_submission": false, "allow_state_write": false, "allow_ledger_write": false, "live_trading_enabled": false, "all_strategies_enabled": false, "broker_submission_enabled": false}, "execution": {"attempted": true, "runner_called": true, "runner_succeeded": true, "failed_step": null, "failure_reason": null, "result_status": "completed_report_only", "runner_result": {"status": "completed_report_only", "selected_strategy_id": "S01", "operation_id": "s01_once_2026_05_16", "paper_only": true, "one_strategy_only": true, "strategy_called": true, "market_data_requested": false, "contracts_qualified": false, "intents_created": false, "tickets_created": false, "orders_submitted": false, "state_written": false, "ledger_written": false, "live_trading_enabled": false, "all_strategies_enabled": false, "broker_submission_enabled": false, "warnings": [], "errors": []}, "unsafe_runner_flags": [], "completed": true}, "readiness_for_stage4j6": {"ready_to_build_controlled_paper_operation_acceptance": true}, "success": true, "errors": [], "warnings": []}'
+```
+
 ## Stage 4J-5
 
 Stage 4J-5 is the first controlled selected-strategy PAPER operation executor shell. It consumes
