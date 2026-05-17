@@ -86,6 +86,39 @@ Required operator acknowledgements are exact strings:
 
 Broker submission remains separately gated. Intents, tickets, state writes, and ledger writes remain separately gated. Live trading and all-strategy automation remain blocked. The next phase is Stage 4K-5: the controlled market data and contract qualification executor.
 
+## Stage 4K-5 Purpose
+
+Stage 4K-5 is the controlled provider executor. It consumes the accepted Stage 4K-4 execution gate report and may execute only the explicitly permitted injected controlled provider abstractions for the selected strategy.
+
+Stage 4K-5 may call `request_controlled_market_data` only through the injected controlled market data provider and only when the 4K-4 payload sets `allow_controlled_market_data_provider_call: true`. It may call `qualify_controlled_contracts` only through the injected controlled contract qualification provider and only when `allow_controlled_contract_qualification_provider_call: true`.
+
+The executor never calls direct IBKR methods. These remain forbidden in Stage 4K-5:
+
+- `reqMktData`
+- `qualifyContracts`
+- `reqContractDetails`
+
+Market-data-only, contract-qualification-only, and combined provider payload plans are valid. Provider payload lists are extracted with safe `dict.get(..., [])` handling, present `None` values are treated as empty lists, and list checks use safe length checks before execution. Stage 4K-5 must not use unsafe index access when deciding whether payloads exist.
+
+Provider payloads and provider outputs are untrusted. Payloads must be native dictionaries, JSON-safe, selected-strategy-only, operation-matched, and must keep live trading, broker submission, order submission, state writes, and ledger writes disabled. Provider outputs are copied into the report only after validation; they must not claim direct IBKR calls, order submission, broker submission, state writes, ledger writes, or live trading.
+
+Provider exceptions are caught and flattened into JSON-safe strings in the form `ExceptionType: message`. Raw newlines and memory-address-style object repr fragments are removed before the failure is placed in `provider_call_trace`, `failed_operations`, or `skipped_operations`.
+
+The report records:
+
+- `provider_call_trace`
+- `applied_operations`
+- `failed_operations`
+- `skipped_operations`
+- market data execution results
+- contract qualification execution results
+
+If a market data provider call fails, subsequent provider execution is skipped and recorded. Successful provider calls are listed in `applied_operations`; failed calls are listed in `failed_operations`; payloads not attempted after a failure or validation block are listed in `skipped_operations`.
+
+Stage 4K-5 still does not run strategy scans, create intents, create tickets, submit orders, enable broker submission, write state, write ledgers, enable live trading, or enable all-strategy automation. Broker submission remains separately gated. Controlled provider results are read-only inputs for future stages.
+
+The next phase is Stage 4K-6: market data and contract qualification acceptance.
+
 ## Examples
 
 ```bash
@@ -137,10 +170,10 @@ python3 -m algo_trader_unified.tools.stage4k4_market_data_contract_execution_gat
 ```
 
 ```bash
-python3 -m algo_trader_unified.tools.stage4k3_market_data_contract_dry_run \
+python3 -m algo_trader_unified.tools.stage4k5_market_data_contract_executor \
   --dry-run-only \
   --json \
-  --stage4k2-plan-json '{...}' \
+  --stage4k4-gate-json '{...}' \
   --state-snapshot-json '{...}' \
   --risk-snapshot-json '{...}' \
   --scheduler-snapshot-json '{...}' \
@@ -148,3 +181,5 @@ python3 -m algo_trader_unified.tools.stage4k3_market_data_contract_dry_run \
   --paper-broker-snapshot-json '{...}' \
   --market-window-snapshot-json '{...}'
 ```
+
+The Stage 4K-5 CLI is validation-only unless injected providers are supplied from Python/tests. It does not instantiate production providers, connect to IBKR, register scheduler or lifecycle jobs, submit orders, or expose submit/cancel/status actions.
