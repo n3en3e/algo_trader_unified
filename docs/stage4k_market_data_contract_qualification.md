@@ -68,13 +68,6 @@ The proposed Stage 4K-5 payload uses:
 - `live_trading_enabled: false`
 - `all_strategies_enabled: false`
 
-Stale Stage 4J executor fields are not part of Stage 4K-4 or Stage 4K-5:
-
-- `proposed_execution_permissions_for_4J5`
-- `may_call_strategy_next_phase`
-- `may_build_executor_next_phase`
-- `may_fetch_market_data_next_phase`
-
 Required operator acknowledgements are exact strings:
 
 - `ACK_4K4_MARKET_DATA_AND_CONTRACT_GATE_ONLY`
@@ -118,6 +111,31 @@ If a market data provider call fails, subsequent provider execution is skipped a
 Stage 4K-5 still does not run strategy scans, create intents, create tickets, submit orders, enable broker submission, write state, write ledgers, enable live trading, or enable all-strategy automation. Broker submission remains separately gated. Controlled provider results are read-only inputs for future stages.
 
 The next phase is Stage 4K-6: market data and contract qualification acceptance.
+
+## Stage 4K-6 Purpose
+
+Stage 4K-6 is acceptance and reporting only. It consumes the accepted Stage 4K-5 executor report and decides whether the selected strategy's controlled market data and/or contract qualification capability is complete enough to use as read-only input for the next phase.
+
+Stage 4K-6 does not call providers again. It does not call `request_controlled_market_data` or `qualify_controlled_contracts`, and direct IBKR methods remain forbidden:
+
+- `reqMktData`
+- `qualifyContracts`
+- `reqContractDetails`
+
+The accepted outputs are intentionally narrow:
+
+- `accepted_market_data_outputs`
+- `accepted_contract_qualification_outputs`
+
+Each accepted output list includes only successful, JSON-safe, safe provider results from the Stage 4K-5 `provider_call_trace`. The order preserves the Stage 4K-5 trace order. These outputs are read-only for future stages; Stage 4K-6 does not write files, mutate state, append ledgers, create intents, create tickets, submit orders, or enable broker submission.
+
+Stage 4K-6 validates the operation audit by comparing successful `provider_call_trace` entries to `applied_operations` with stable IDs such as `payload_id`, `provider_type`, `provider_method`, `selected_strategy_id`, and `operation_id`. It does not rely on brittle list-index alignment. The audit safely handles skipped, failed, malformed, and `None` list entries by blocking readiness with clear reasons rather than crashing.
+
+Nested `provider_call_trace.result` safety fields use strict native booleans. Required-disabled fields must be native `false`; a string value such as `"False"` is rejected because it does not prove the Stage 4K-5 executor serialized a native boolean.
+
+Stage 4K-6 still does not run strategy scans, create intents, create tickets, submit orders, enable broker submission, write state, write ledgers, enable live trading, enable all-strategy automation, register scheduler jobs, or execute lifecycle transitions. Broker submission remains separately gated.
+
+When all acceptance gates pass, Stage 4K-6 reports `readiness_for_next_phase.stage4k_complete: true` and `readiness_for_next_phase.ready_to_proceed_after_stage4k: true`. Stage 4K completion means the controlled market data and contract qualification capability is complete for the selected strategy. It does not mean full PAPER trading is active. The next phase is Stage 4L signal/readiness integration, or the next defined post-4K phase, which should consume accepted 4K outputs as read-only inputs while broker submission remains separately gated.
 
 ## Examples
 
@@ -183,3 +201,18 @@ python3 -m algo_trader_unified.tools.stage4k5_market_data_contract_executor \
 ```
 
 The Stage 4K-5 CLI is validation-only unless injected providers are supplied from Python/tests. It does not instantiate production providers, connect to IBKR, register scheduler or lifecycle jobs, submit orders, or expose submit/cancel/status actions.
+
+```bash
+python3 -m algo_trader_unified.tools.stage4k6_market_data_contract_acceptance \
+  --dry-run-only \
+  --json \
+  --stage4k5-executor-json '{...}' \
+  --state-snapshot-json '{...}' \
+  --risk-snapshot-json '{...}' \
+  --scheduler-snapshot-json '{...}' \
+  --lifecycle-snapshot-json '{...}' \
+  --paper-broker-snapshot-json '{...}' \
+  --market-window-snapshot-json '{...}'
+```
+
+The Stage 4K-6 CLI is acceptance/reporting only. It does not instantiate providers, connect to IBKR, expose provider execution actions, register scheduler or lifecycle jobs, submit orders, or expose submit/cancel/status actions.
